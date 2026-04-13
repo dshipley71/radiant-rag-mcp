@@ -4,8 +4,8 @@
 
 `radiant-rag-mcp` wraps the full Radiant RAG pipeline as ten
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) tools.
-Transport is runtime-selectable: use **stdio** for Claude Code and Claude
-Desktop, or **SSE** / **Streamable HTTP** for remote server deployments.
+Transport is runtime-selectable: use **stdio** for Claude Code and Claude Desktop,
+or **HTTP** for remote server and notebook deployments.
 
 ---
 
@@ -14,28 +14,18 @@ Desktop, or **SSE** / **Streamable HTTP** for remote server deployments.
 ### Default backend — ChromaDB (no external service required)
 
 ```bash
-pip install radiant-rag-mcp
-# or explicitly:
-pip install "radiant-rag-mcp[chroma]"
+pip install "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
 ```
 
-ChromaDB runs embedded in-process.  No Docker, no database server.
+ChromaDB runs embedded in-process. No Docker, no database server.
 
 ### Redis Stack backend
 
 ```bash
-pip install "radiant-rag-mcp[redis]"
+pip install "radiant-rag-mcp[redis] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
 ```
 
 Requires a running Redis Stack container (see [Docker commands](#docker-commands) below).
-
-### PostgreSQL + pgvector backend
-
-```bash
-pip install "radiant-rag-mcp[pgvector]"
-```
-
-Requires a running pgvector container (see [Docker commands](#docker-commands) below).
 
 ---
 
@@ -51,32 +41,13 @@ docker run -d \
   redis/redis-stack:latest
 ```
 
-The server is reachable at `redis://localhost:6379`.  RedisInsight is
+The server is reachable at `redis://localhost:6379`. RedisInsight is
 available at `http://localhost:8001`.
 
 Set the backend at runtime:
 
 ```bash
 export RADIANT_STORAGE_BACKEND=redis
-```
-
-### PostgreSQL + pgvector
-
-```bash
-docker run -d \
-  --name radiant-pgvector \
-  -p 5432:5432 \
-  -e POSTGRES_PASSWORD=radiant \
-  -e POSTGRES_DB=radiant \
-  pgvector/pgvector:pg16
-```
-
-Default connection string: `postgresql://postgres:radiant@localhost:5432/radiant`.
-Override with:
-
-```bash
-export PG_CONN_STR="postgresql://user:password@host:5432/dbname"
-export RADIANT_STORAGE_BACKEND=pgvector
 ```
 
 ---
@@ -94,7 +65,7 @@ export RADIANT_STORAGE_BACKEND=pgvector
       "type": "stdio",
       "command": "radiant-mcp",
       "env": {
-        "RADIANT_OLLAMA_BASE_URL": "http://ollama.com",
+        "RADIANT_OLLAMA_BASE_URL": "https://ollama.com/v1",
         "RADIANT_OLLAMA_API_KEY": "your-api-key"
       }
     }
@@ -102,20 +73,7 @@ export RADIANT_STORAGE_BACKEND=pgvector
 }
 ```
 
-#### SSE (remote server)
-
-```json
-{
-  "mcpServers": {
-    "radiant-rag": {
-      "type": "sse",
-      "url": "http://127.0.0.1:8000/sse"
-    }
-  }
-}
-```
-
-#### Streamable HTTP (remote server, modern)
+#### HTTP (remote server, modern Streamable HTTP transport)
 
 ```json
 {
@@ -128,25 +86,38 @@ export RADIANT_STORAGE_BACKEND=pgvector
 }
 ```
 
-### Starting the server for SSE or HTTP transport
+#### SSE (remote server, legacy)
 
-Set `RADIANT_TRANSPORT` before starting `radiant-mcp`.  The server binds to
+```json
+{
+  "mcpServers": {
+    "radiant-rag": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8000/sse"
+    }
+  }
+}
+```
+
+### Starting the server for HTTP or SSE transport
+
+Set `RADIANT_TRANSPORT` before starting `radiant-mcp`. The server binds to
 `RADIANT_HOST:RADIANT_PORT` (defaults: `127.0.0.1:8000`):
 
 ```bash
-# SSE transport
-RADIANT_TRANSPORT=sse \
-  RADIANT_HOST=127.0.0.1 \
-  RADIANT_PORT=8000 \
-  RADIANT_OLLAMA_BASE_URL=http://ollama.com \
-  RADIANT_OLLAMA_API_KEY=your-api-key \
-  radiant-mcp
-
-# Streamable HTTP transport
+# HTTP transport (Streamable HTTP — recommended)
 RADIANT_TRANSPORT=http \
   RADIANT_HOST=127.0.0.1 \
   RADIANT_PORT=8000 \
-  RADIANT_OLLAMA_BASE_URL=http://ollama.com \
+  RADIANT_OLLAMA_BASE_URL=https://ollama.com/v1 \
+  RADIANT_OLLAMA_API_KEY=your-api-key \
+  radiant-mcp
+
+# SSE transport (legacy)
+RADIANT_TRANSPORT=sse \
+  RADIANT_HOST=127.0.0.1 \
+  RADIANT_PORT=8000 \
+  RADIANT_OLLAMA_BASE_URL=https://ollama.com/v1 \
   RADIANT_OLLAMA_API_KEY=your-api-key \
   radiant-mcp
 ```
@@ -165,20 +136,19 @@ RADIANT_CONFIG_PATH=/path/to/config.yaml radiant-mcp
 
 | Variable | Description | Default |
 |---|---|---|
-| `RADIANT_OLLAMA_BASE_URL` | Ollama / OpenAI-compatible LLM endpoint base URL | `http://ollama.com` |
+| `RADIANT_OLLAMA_BASE_URL` | LLM endpoint base URL (must include `/v1` for Ollama) | _(required)_ |
 | `RADIANT_OLLAMA_API_KEY` | API key for the LLM endpoint | _(none)_ |
 | `RADIANT_TRANSPORT` | MCP transport: `stdio`, `sse`, or `http` | `stdio` |
 | `RADIANT_HOST` | Bind address for SSE and HTTP transports | `127.0.0.1` |
 | `RADIANT_PORT` | Bind port for SSE and HTTP transports | `8000` |
 | `RADIANT_CONFIG_PATH` | Path to a custom `config.yaml` | _(repo root)_ |
-| `RADIANT_STORAGE_BACKEND` | Override vector store backend: `chroma`, `redis`, or `pgvector` | `chroma` |
-| `PG_CONN_STR` | PostgreSQL connection string (pgvector backend only) | `postgresql://postgres:radiant@localhost:5432/radiant` |
+| `RADIANT_STORAGE_BACKEND` | Override vector store backend: `chroma` or `redis` | `chroma` |
 | `RADIANT_LLM_BACKEND_MODEL` | Override the LLM model name | `gemma4:31b-cloud` |
 | `RADIANT_LLM_BACKEND_BASE_URL` | Low-level alias for `RADIANT_OLLAMA_BASE_URL` | — |
 | `RADIANT_LLM_BACKEND_API_KEY` | Low-level alias for `RADIANT_OLLAMA_API_KEY` | — |
 
-All `config.yaml` keys can also be overridden via `RADIANT_<SECTION>_<KEY>`
-(e.g. `RADIANT_RETRIEVAL_TOP_K=20`).
+All `config.yaml` keys can be overridden via `RADIANT_<SECTION>_<KEY>`
+(e.g. `RADIANT_RETRIEVAL_DENSE_TOP_K=5`, `RADIANT_PIPELINE_USE_CRITIC=false`).
 
 ---
 
@@ -200,9 +170,6 @@ All `config.yaml` keys can also be overridden via `RADIANT_<SECTION>_<KEY>`
 ---
 
 ## Tool usage examples
-
-Each example shows both the natural language prompt you would give Claude Code
-and the equivalent MCP Inspector JSON call for direct testing.
 
 ---
 
@@ -231,12 +198,14 @@ Search my knowledge base for documents about hybrid retrieval and BM25 scoring.
 
 **Claude Code prompt (single-turn):**
 ```
-Query my knowledge base: what are the performance trade-offs between Redis and ChromaDB for large document collections?
+Query my knowledge base: what are the performance trade-offs between Redis and ChromaDB
+for large document collections?
 ```
 
-**Claude Code prompt (multi-turn — requires a conversation ID from `start_conversation` first):**
+**Claude Code prompt (multi-turn):**
 ```
-Query my knowledge base using conversation ID "conv_abc123": based on the previous answer, which backend is better for low-latency production use?
+Query my knowledge base using conversation ID "conv_abc123": based on the previous
+answer, which backend is better for low-latency production use?
 ```
 
 **MCP Inspector call:**
@@ -291,24 +260,20 @@ Start a new conversation session in my knowledge base so I can ask follow-up que
 **Example response:**
 ```json
 {
-  "conversation_id": "conv_abc123"
+  "conversation_id": "a3d68495-88d8-474a-9646-a49ee162bea3"
 }
 ```
 
-Pass the returned `conversation_id` to subsequent `query_knowledge` calls to maintain context across turns.
+Pass the returned `conversation_id` to subsequent `query_knowledge` calls to maintain
+context across turns.
 
 ---
 
 ### `ingest_documents`
 
-**Claude Code prompt (hierarchical, default):**
+**Claude Code prompt:**
 ```
 Index the documents in /home/user/docs/reports into my knowledge base.
-```
-
-**Claude Code prompt (flat storage):**
-```
-Index /home/user/docs/glossary into my knowledge base using flat storage.
 ```
 
 **MCP Inspector call:**
@@ -336,11 +301,6 @@ Index https://docs.example.com/api-reference into my knowledge base without craw
 Index the GitHub repository https://github.com/owner/repo into my knowledge base.
 ```
 
-**Claude Code prompt (crawled site):**
-```
-Crawl and index https://docs.example.com up to 3 levels deep, maximum 50 pages.
-```
-
 **MCP Inspector call:**
 ```json
 {
@@ -359,8 +319,7 @@ Crawl and index https://docs.example.com up to 3 levels deep, maximum 50 pages.
   "arguments": {
     "url": "https://docs.example.com",
     "crawl_depth": 3,
-    "max_pages": 50,
-    "no_crawl": false
+    "max_pages": 50
   }
 }
 ```
@@ -371,7 +330,7 @@ Crawl and index https://docs.example.com up to 3 levels deep, maximum 50 pages.
 
 **Claude Code prompt:**
 ```
-Show me the current state of my knowledge base — document counts, health, and storage backend.
+Show me the current state of my knowledge base — document counts and health.
 ```
 
 **MCP Inspector call:**
@@ -382,28 +341,11 @@ Show me the current state of my knowledge base — document counts, health, and 
 }
 ```
 
-**Example response:**
-```json
-{
-  "total_documents": 1482,
-  "total_chunks": 9847,
-  "storage_backend": "chroma",
-  "index_healthy": true,
-  "bm25_index_size": 9847,
-  "embedding_model": "sentence-transformers/all-MiniLM-L12-v2"
-}
-```
-
 ---
 
 ### `clear_index`
 
-**Claude Code prompt:**
-```
-Clear all documents from my knowledge base. I confirm this action.
-```
-
-**MCP Inspector call:**
+**MCP Inspector call (confirmed):**
 ```json
 {
   "tool": "clear_index",
@@ -413,7 +355,7 @@ Clear all documents from my knowledge base. I confirm this action.
 }
 ```
 
-**Without confirmation (safe default):**
+**Without confirmation (safe default — no data deleted):**
 ```json
 {
   "tool": "clear_index",
@@ -423,15 +365,13 @@ Clear all documents from my knowledge base. I confirm this action.
 }
 ```
 
-Returns: `{"status": "cancelled", "reason": "pass confirm=True to proceed"}` — no data is deleted.
-
 ---
 
 ### `rebuild_bm25`
 
 **Claude Code prompt:**
 ```
-My BM25 search results seem stale. Rebuild the BM25 index from the current vector store.
+Rebuild the BM25 index from the current vector store.
 ```
 
 **MCP Inspector call:**
@@ -442,29 +382,11 @@ My BM25 search results seem stale. Rebuild the BM25 index from the current vecto
 }
 ```
 
-**Example response:**
-```json
-{
-  "status": "ok",
-  "message": "BM25 index rebuilt from 9847 documents."
-}
-```
-
 ---
 
 ### `set_ingest_mode`
 
-**Claude Code prompt (switch to flat):**
-```
-Switch my knowledge base ingestion to flat storage mode for this session.
-```
-
-**Claude Code prompt (switch back to hierarchical):**
-```
-Switch ingestion back to hierarchical storage mode.
-```
-
-**MCP Inspector call:**
+**MCP Inspector call (switch to flat):**
 ```json
 {
   "tool": "set_ingest_mode",
@@ -478,7 +400,7 @@ Switch ingestion back to hierarchical storage mode.
 ```json
 {
   "hierarchical": false,
-  "message": "Ingestion mode set to flat storage for this session."
+  "message": "Ingest mode set to 'flat'. All subsequent ingest_documents calls will use flat storage by default."
 }
 ```
 
@@ -486,14 +408,15 @@ Switch ingestion back to hierarchical storage mode.
 
 ## LLM model
 
-The default LLM model is `gemma4:31b-cloud` and the default base URL is
-`http://ollama.com` (configured in `config.yaml` under `llm_backend`).
-Override at runtime:
+The default model is `gemma4:31b-cloud` via `https://ollama.com/v1` (configured
+in `config.yaml` under `llm_backend`). Override at runtime:
 
 ```bash
-export RADIANT_OLLAMA_BASE_URL="http://localhost:11434/v1"   # local Ollama
+export RADIANT_OLLAMA_BASE_URL="http://localhost:11434/v1"  # local Ollama
 export RADIANT_LLM_BACKEND_MODEL="your-model-name"
 ```
+
+Note: the Ollama base URL must end in `/v1` for the OpenAI-compatible endpoint.
 
 ---
 
@@ -502,12 +425,7 @@ export RADIANT_LLM_BACKEND_MODEL="your-model-name"
 ```bash
 git clone https://github.com/dshipley71/radiant-rag
 cd radiant-rag
+git checkout mcp
 pip install -e ".[chroma,dev]"
 radiant-mcp --config config.yaml
-```
-
-Run tests:
-
-```bash
-pytest tests/
 ```
