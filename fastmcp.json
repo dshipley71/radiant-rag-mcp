@@ -1,0 +1,4 @@
+{
+  "source": { "path": "src/radiant_rag_mcp/server.py", "entrypoint": "mcp" },
+  "deployment": { "transport": "stdio" }
+}

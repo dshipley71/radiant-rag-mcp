@@ -1,0 +1,931 @@
+# =============================================================================
+# Radiant Agentic RAG Configuration
+# =============================================================================
+# This file contains all configuration parameters with sensible defaults.
+# Environment variables can override any setting using the pattern:
+#   RADIANT_<SECTION>_<KEY> (e.g., RADIANT_OLLAMA_CHAT_MODEL)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Vision Language Model (VLM) for Image Captioning
+# Uses HuggingFace Transformers for local inference
+# -----------------------------------------------------------------------------
+vlm:
+  # Enable/disable VLM image captioning
+  enabled: false
+
+  # HuggingFace model name (downloaded automatically)
+  # Options:
+  #   - "Qwen/Qwen2-VL-2B-Instruct" (default, ~4GB, good balance)
+  #   - "Qwen/Qwen2-VL-7B-Instruct" (better quality, ~15GB)
+  #   - "llava-hf/llava-1.5-7b-hf" (alternative)
+  #   - "microsoft/Phi-3-vision-128k-instruct" (lightweight)
+  model_name: "Qwen/Qwen3-VL-8B-Instruct"
+
+  # Device: "auto" (recommended), "cuda", "cpu", "mps"
+  device: "auto"
+
+  # Memory-efficient quantization (requires bitsandbytes)
+  # load_in_4bit: true reduces memory by ~75% with slight quality loss
+  # load_in_8bit: true reduces memory by ~50% with minimal quality loss
+  load_in_4bit: true
+  load_in_8bit: false
+
+  # Generation parameters
+  max_new_tokens: 512
+  temperature: 0.2
+
+  # Custom cache directory for model downloads (null = HuggingFace default)
+  cache_dir: null
+
+  # Fallback to Ollama if HuggingFace not available
+  ollama_fallback_url: "http://localhost:11434"
+  ollama_fallback_model: "llava"
+
+# -----------------------------------------------------------------------------
+# Backend Configuration (Flexible Model Selection)
+# -----------------------------------------------------------------------------
+# Configure backends independently for LLM, embeddings, and reranking.
+#
+# Supported backend types:
+# - ollama: Ollama API
+# - vllm: vLLM OpenAI-compatible API
+# - openai: OpenAI API
+# - local: Local HuggingFace models
+# -----------------------------------------------------------------------------
+
+# LLM Backend Configuration (for chat/generation)
+llm_backend:
+  # Backend type: ollama | vllm | openai | local
+  backend_type: "ollama"
+
+  # For ollama, vllm, openai backends:
+  base_url: "https://ollama.com/v1"
+  api_key: ""
+  # model: "gemma4:31b-cloud"
+  model: "gemma3:12b-cloud"
+
+  # For local backend (HuggingFace Transformers), uncomment:
+  # model_name: "meta-llama/Llama-2-7b-chat-hf"
+  # device: "auto"
+  # load_in_4bit: false
+  # load_in_8bit: false
+
+  # Common settings:
+  timeout: 30
+  max_retries: 0
+  retry_delay: 1.0
+
+# Embedding Backend Configuration
+embedding_backend:
+  # Backend type: local | ollama | vllm | openai
+  backend_type: "local"
+
+  # For local backend (sentence-transformers or HuggingFace):
+  model_name: "sentence-transformers/all-MiniLM-L12-v2"
+  device: "auto"
+  embedding_dimension: 384
+  cache_size: 10000
+
+  # For ollama, vllm, openai backends, uncomment:
+  # base_url: "http://localhost:11434/v1"
+  # api_key: "ollama"
+  # model: "nomic-embed-text"
+  # embedding_dimension: 768
+
+# Reranking Backend Configuration
+reranking_backend:
+  # Backend type: local | ollama | vllm | openai
+  backend_type: "local"
+
+  # For local backend (cross-encoder):
+  model_name: "cross-encoder/ms-marco-MiniLM-L12-v2"
+  device: "auto"
+
+  # For ollama, vllm, openai backends (uses LLM for scoring), uncomment:
+  # base_url: "http://localhost:11434/v1"
+  # api_key: "ollama"
+  # model: "gemma3:12b"
+
+# -----------------------------------------------------------------------------
+# Storage Backend Selection
+# -----------------------------------------------------------------------------
+# Choose which vector database backend to use for document storage.
+# Options: "redis" (default), "chroma", "pgvector"
+storage:
+  backend: redis
+
+# -----------------------------------------------------------------------------
+# Redis Configuration (default backend)
+# -----------------------------------------------------------------------------
+redis:
+  # Redis connection URL
+  url: "redis://localhost:6379/0"
+
+  # Key prefix for all RAG data
+  key_prefix: "radiant"
+
+  # Namespace for document content
+  doc_ns: "doc"
+
+  # Namespace for embeddings (used in vector index)
+  embed_ns: "emb"
+
+  # Namespace for metadata
+  meta_ns: "meta"
+
+  # Namespace for conversation history
+  conversation_ns: "conv"
+
+  # Maximum characters per document content
+  max_content_chars: 200000
+
+  # Vector index configuration
+  vector_index:
+    # Index name for vector search
+    name: "radiant_vectors"
+
+    # HNSW algorithm parameters
+    # M: number of bi-directional links per node (higher = better recall, more memory)
+    hnsw_m: 16
+
+    # EF_CONSTRUCTION: size of dynamic candidate list during index construction
+    hnsw_ef_construction: 200
+
+    # EF_RUNTIME: size of dynamic candidate list during search (can be overridden per query)
+    hnsw_ef_runtime: 100
+
+    # Distance metric: COSINE, L2, or IP (inner product)
+    distance_metric: "COSINE"
+
+# -----------------------------------------------------------------------------
+# Chroma Configuration (alternative backend)
+# -----------------------------------------------------------------------------
+# ChromaDB is a lightweight, embedded vector database that stores data locally.
+# Good for development, testing, and smaller deployments.
+chroma:
+  # Directory to persist Chroma data
+  persist_directory: "./data/chroma_db"
+
+  # Collection name for storing documents
+  collection_name: "radiant_docs"
+
+  # Distance function: "cosine", "l2", "ip" (inner product)
+  distance_fn: "cosine"
+
+  # Embedding dimension (must match embed_model_name output)
+  embedding_dimension: 384
+
+  # Maximum characters per document content
+  max_content_chars: 200000
+
+# -----------------------------------------------------------------------------
+# BM25 Index Configuration
+# -----------------------------------------------------------------------------
+bm25:
+  # Base path for BM25 index (without extension)
+  # The index is stored as compressed JSON (.json.gz) for security and portability
+  # Legacy pickle files (.pkl) are automatically migrated on first load
+  index_path: "./data/bm25_index"
+
+  # Maximum documents to index
+  max_documents: 100000
+
+  # Auto-save after this many new documents
+  auto_save_threshold: 100
+
+  # BM25 algorithm parameters
+  k1: 1.5
+  b: 0.75
+
+# -----------------------------------------------------------------------------
+# Ingestion & Batch Processing Configuration
+# -----------------------------------------------------------------------------
+# Controls batch processing for document ingestion to improve performance
+# when indexing large document collections.
+ingestion:
+  # Enable batch processing (recommended for large corpora)
+  # When enabled, embeddings are generated in batches and Redis operations
+  # are pipelined for significantly improved throughput
+  batch_enabled: true
+
+  # Batch size for embedding generation
+  # Larger values = faster processing but more GPU/CPU memory usage
+  # Recommended: 16-64 for GPU, 8-32 for CPU
+  embedding_batch_size: 32
+
+  # Batch size for Redis pipeline operations
+  # Larger values = fewer round trips but more memory
+  # Recommended: 50-200
+  redis_batch_size: 100
+
+  # Default child chunk size for hierarchical storage (characters)
+  # Smaller chunks = more precise retrieval but more storage
+  child_chunk_size: 512
+
+  # Overlap between child chunks (characters)
+  # Helps maintain context across chunk boundaries
+  child_chunk_overlap: 50
+
+  # Show progress bar during ingestion
+  show_progress: true
+
+  # Embed parent documents in addition to child chunks
+  # When true, parent documents are embedded and can be retrieved directly
+  # This enables search_scope to include "parents" or "all"
+  # When false (default), only child chunks are embedded (original behavior)
+  embed_parents: false
+
+# -----------------------------------------------------------------------------
+# Retrieval Configuration
+# -----------------------------------------------------------------------------
+retrieval:
+  # Top-K for dense embedding retrieval
+  dense_top_k: 5
+
+  # Top-K for BM25 sparse retrieval
+  bm25_top_k: 5
+
+  # Top-K after RRF fusion
+  fused_top_k: 10
+
+  # RRF constant (higher = more weight to lower-ranked docs)
+  rrf_k: 60
+
+  # Minimum similarity score for dense retrieval (0.0 to 1.0)
+  min_similarity: 0.0
+
+  # Search scope for vector retrieval when using hierarchical storage
+  # Options:
+  #   - "leaves" (default): Only search leaf/child chunks
+  #   - "parents": Only search parent documents (requires embed_parents=true)
+  #   - "all": Search both leaves and parents (requires embed_parents=true)
+  # Note: "parents" and "all" only work if embed_parents=true during ingestion
+  search_scope: "leaves"
+
+# -----------------------------------------------------------------------------
+# Reranking Configuration
+# -----------------------------------------------------------------------------
+rerank:
+  # Top-K after reranking
+  top_k: 8
+
+  # Maximum characters per document for reranking input
+  max_doc_chars: 3000
+
+  # Number of candidates to consider (multiplier of top_k)
+  candidate_multiplier: 4
+
+  # Minimum candidates to consider
+  min_candidates: 16
+
+# -----------------------------------------------------------------------------
+# Auto-Merging Configuration
+# -----------------------------------------------------------------------------
+automerge:
+  # Minimum children required to merge into parent
+  min_children_to_merge: 2
+
+  # Maximum parent document length (chars) to allow merge
+  max_parent_chars: 50000
+
+# -----------------------------------------------------------------------------
+# Answer Synthesis Configuration
+# -----------------------------------------------------------------------------
+synthesis:
+  # Maximum context documents to include
+  max_context_docs: 8
+
+  # Maximum characters per context document
+  max_doc_chars: 4000
+
+  # Include conversation history in synthesis
+  include_history: true
+
+  # Maximum history turns to include
+  max_history_turns: 5
+
+# -----------------------------------------------------------------------------
+# Critic Agent Configuration
+# -----------------------------------------------------------------------------
+critic:
+  # Enable critic evaluation
+  enabled: true
+
+  # Maximum context documents for critique
+  max_context_docs: 8
+
+  # Maximum characters per document for critique
+  max_doc_chars: 1200
+
+  # Retry synthesis if critic finds issues (enables agentic retry loop)
+  retry_on_issues: true
+
+  # Maximum retry attempts
+  max_retries: 2
+
+  # Confidence threshold - answers below this trigger "I don't know" response
+  confidence_threshold: 0.4
+
+  # Minimum retrieval confidence to proceed
+  min_retrieval_confidence: 0.3
+
+# -----------------------------------------------------------------------------
+# Agentic Behavior Configuration
+# -----------------------------------------------------------------------------
+# Controls the agentic enhancements: dynamic retrieval, tools, strategy memory
+agentic:
+  # Enable dynamic retrieval mode selection (let planner choose dense/bm25/hybrid)
+  dynamic_retrieval_mode: true
+
+  # Enable tool usage (calculator, code execution)
+  tools_enabled: true
+
+  # Enable strategy memory for adaptive retrieval learning
+  strategy_memory_enabled: true
+
+  # Path to store strategy memory (relative to working directory)
+  strategy_memory_path: "./data/strategy_memory.json.gz"
+
+  # Maximum retry attempts when critic finds quality issues
+  max_critic_retries: 2
+
+  # Overall confidence threshold for "I don't know" response
+  confidence_threshold: 0.4
+
+  # Enable query rewriting on retry attempts
+  rewrite_on_retry: true
+
+  # Expand retrieval scope on retry (fetch more documents)
+  expand_retrieval_on_retry: true
+
+  # Factor to expand retrieval by on retry (1.5 = 50% more docs)
+  retry_expansion_factor: 1.5
+
+# -----------------------------------------------------------------------------
+# Intelligent Chunking Configuration
+# LLM-based semantic chunking for improved retrieval quality
+# -----------------------------------------------------------------------------
+chunking:
+  # Enable intelligent chunking (vs basic fixed-size)
+  enabled: true
+
+  # Use LLM for chunking decisions (vs rule-based only)
+  # LLM chunking preserves semantic boundaries better but is slower
+  use_llm_chunking: true
+
+  # Document length threshold for LLM chunking (shorter docs use rule-based)
+  llm_chunk_threshold: 3000
+
+  # Minimum chunk size in characters
+  min_chunk_size: 200
+
+  # Maximum chunk size in characters
+  max_chunk_size: 1500
+
+  # Target chunk size (for LLM guidance)
+  target_chunk_size: 800
+
+  # Overlap between chunks for context preservation
+  overlap_size: 100
+
+# -----------------------------------------------------------------------------
+# Summarization Configuration
+# Context compression and conversation history summarization
+# -----------------------------------------------------------------------------
+summarization:
+  # Enable summarization agent
+  enabled: true
+
+  # Minimum document length to trigger summarization (characters)
+  min_doc_length_for_summary: 2000
+
+  # Target summary length (characters)
+  target_summary_length: 500
+
+  # Compress conversation after this many turns
+  conversation_compress_threshold: 6
+
+  # Keep this many recent turns verbatim (not summarized)
+  conversation_preserve_recent: 2
+
+  # Similarity threshold for document clustering (0-1)
+  # Documents above this similarity are candidates for merging
+  similarity_threshold: 0.85
+
+  # Maximum documents to merge in a single cluster
+  max_cluster_size: 3
+
+  # Maximum total context characters (triggers compression if exceeded)
+  max_total_context_chars: 8000
+
+# -----------------------------------------------------------------------------
+# Context Evaluation Configuration
+# Pre-generation quality gate to prevent wasted LLM calls
+# -----------------------------------------------------------------------------
+context_evaluation:
+  # Enable pre-generation context evaluation
+  enabled: true
+
+  # Use LLM for detailed evaluation (vs heuristics only)
+  use_llm_evaluation: true
+
+  # Minimum score to consider context sufficient (0-1)
+  # Higher = stricter quality requirements
+  sufficiency_threshold: 0.5
+
+  # Minimum number of relevant documents required
+  min_relevant_docs: 1
+
+  # Maximum docs to include in evaluation
+  max_docs_to_evaluate: 8
+
+  # Maximum characters per doc for evaluation
+  max_doc_chars: 1000
+
+  # Skip generation entirely if context evaluation recommends abort
+  # If false, still attempts generation but may trigger retry
+  abort_on_poor_context: false
+
+# -----------------------------------------------------------------------------
+# Multi-hop Reasoning Configuration
+# Handles complex queries requiring multiple retrieval steps
+# -----------------------------------------------------------------------------
+multihop:
+  # Enable multi-hop reasoning for complex queries
+  # Disabled: 2 extra LLM calls, ~4 extra minutes. Re-enable for large corpora.
+  enabled: false
+
+  # Maximum reasoning hops (each hop is a retrieval + extraction cycle)
+  max_hops: 3
+
+  # Documents to retrieve per hop
+  docs_per_hop: 5
+
+  # Minimum confidence to continue chain (0-1)
+  # If intermediate answer confidence falls below this, chain stops
+  min_confidence_to_continue: 0.3
+
+  # Enable entity extraction for follow-up queries
+  enable_entity_extraction: true
+
+  # Force multi-hop for all queries (for testing/debugging)
+  force_multihop: false
+
+# -----------------------------------------------------------------------------
+# Fact Verification Configuration
+# Verifies claims in generated answers against retrieved context
+# -----------------------------------------------------------------------------
+fact_verification:
+  # Enable fact verification
+  # Disabled: ~52s overhead, redundant when critic already scores the answer.
+  enabled: false
+
+  # Minimum confidence to consider a claim supported (0-1)
+  min_support_confidence: 0.6
+
+  # Maximum claims to verify (for efficiency)
+  max_claims_to_verify: 20
+
+  # Generate corrected answers when issues found
+  generate_corrections: true
+
+  # Strict mode: require explicit support (vs reasonable inference)
+  strict_mode: false
+
+  # Minimum overall factuality score to accept answer (0-1)
+  min_factuality_score: 0.5
+
+  # Block answers that fail verification (returns error instead)
+  block_on_failure: false
+
+# -----------------------------------------------------------------------------
+# Citation Tracking Configuration
+# Adds source references to answers for enterprise compliance
+# -----------------------------------------------------------------------------
+citation:
+  # Enable citation tracking
+  enabled: true
+
+  # Citation style: inline, footnote, academic, hyperlink, enterprise
+  # - inline: [1], [2], etc. (default)
+  # - footnote: Superscript numbers
+  # - academic: Author (Year) style
+  # - hyperlink: [Source](url) format
+  # - enterprise: Document ID + timestamp for audit trails
+  citation_style: "inline"
+
+  # Minimum confidence for including a citation (0-1)
+  min_citation_confidence: 0.5
+
+  # Maximum citations per claim
+  max_citations_per_claim: 3
+
+  # Include supporting excerpts from source documents
+  include_excerpts: true
+
+  # Maximum length of excerpts (characters)
+  excerpt_max_length: 200
+
+  # Generate bibliography/references section at end of answer
+  generate_bibliography: true
+
+  # Generate audit trail for compliance
+  generate_audit_trail: true
+
+# -----------------------------------------------------------------------------
+# Language Detection Configuration
+# Detects the language of documents and text for translation
+# -----------------------------------------------------------------------------
+language_detection:
+  # Enable language detection
+  enabled: false
+
+  # Detection method: "fast" (fasttext), "llm", "auto"
+  # - fast: Uses Facebook's FastText model (fastest, 176 languages)
+  # - llm: Uses LLM for detection (slower but handles edge cases)
+  # - auto: Tries fast first, falls back to llm if needed
+  method: "fast"
+
+  # Minimum confidence threshold for fasttext (0-1)
+  # Below this threshold, LLM fallback will be used if enabled
+  min_confidence: 0.7
+
+  # Use LLM fallback for low-confidence detections
+  use_llm_fallback: false
+
+  # Default language if detection fails
+  fallback_language: "en"
+
+  # FastText Model Configuration
+  # Path to store the language identification model (lid.176.ftz, ~131 MB)
+  model_path: "./data/models/fasttext/lid.176.ftz"
+
+  # URL to download the model from (Facebook AI Research official model)
+  model_url: "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz"
+
+  # Automatically download model if not found locally
+  auto_download: true
+
+  # Verify model integrity with checksum (optional, requires valid checksum)
+  verify_checksum: false
+
+# -----------------------------------------------------------------------------
+# Translation Configuration
+# Translates documents to canonical language for indexing
+# -----------------------------------------------------------------------------
+translation:
+  # Enable translation
+  enabled: false
+
+  # Translation method: "llm", "google", "deepl"
+  # Currently only "llm" is implemented (uses existing LLMClient)
+  method: "llm"
+
+  # Canonical language for indexing (target language)
+  # All documents will be translated to this language for indexing
+  canonical_language: "en"
+
+  # Maximum characters per LLM translation call
+  # Longer documents will be chunked at paragraph boundaries
+  max_chars_per_llm_call: 4000
+
+  # Translate documents at ingestion time
+  # When true, documents are translated before indexing
+  translate_at_ingestion: false
+
+  # Translate retrieved docs at query time (fallback)
+  # When true, non-canonical documents are translated on retrieval
+  translate_at_query: false
+
+  # Preserve original text in metadata
+  # When true, original text is stored alongside translated text
+  preserve_original: true
+
+  # API keys for external translation services (if method != "llm")
+  google_api_key: ""
+  deepl_api_key: ""
+
+# -----------------------------------------------------------------------------
+# Query Processing Configuration
+# -----------------------------------------------------------------------------
+query:
+  # Maximum sub-queries from decomposition
+  max_decomposed_queries: 5
+
+  # Maximum expansion terms
+  max_expansions: 12
+
+  # Enable query caching
+  cache_enabled: false
+
+  # Cache TTL in seconds
+  cache_ttl: 3600
+
+# -----------------------------------------------------------------------------
+# Conversation History Configuration
+# -----------------------------------------------------------------------------
+conversation:
+  # Enable conversation history tracking
+  enabled: true
+
+  # Maximum turns to store per conversation
+  max_turns: 50
+
+  # TTL for conversation data (seconds, 0 = no expiry)
+  ttl: 86400
+
+  # Include history in retrieval queries
+  use_history_for_retrieval: true
+
+  # Number of recent turns to use for query context
+  history_turns_for_context: 3
+
+# -----------------------------------------------------------------------------
+# LLM Response Parsing Configuration
+# -----------------------------------------------------------------------------
+parsing:
+  # Maximum retry attempts for JSON parsing failures
+  max_retries: 2
+
+  # Delay between retries (seconds)
+  retry_delay: 0.5
+
+  # Enable strict JSON validation
+  strict_json: false
+
+  # Log parsing failures
+  log_failures: true
+
+# -----------------------------------------------------------------------------
+# Unstructured Document Cleaning Configuration
+# -----------------------------------------------------------------------------
+unstructured_cleaning:
+  enabled: true
+  bullets: false
+  extra_whitespace: true
+  dashes: false
+  trailing_punctuation: false
+  lowercase: false
+
+  # Preview settings for debugging
+  preview_enabled: false
+  preview_max_items: 12
+  preview_max_chars: 800
+
+# -----------------------------------------------------------------------------
+# JSON/JSONL Parsing Configuration
+# -----------------------------------------------------------------------------
+# Controls how JSON and JSONL files are parsed and converted to searchable text
+json_parsing:
+  # Enable JSON/JSONL parsing
+  enabled: true
+
+  # Parsing strategy: "auto", "flatten", "records", "semantic", "logs"
+  # - auto: Automatically detect best strategy based on structure
+  # - flatten: Convert to flat key-value text (for configs, settings)
+  # - records: Split arrays into separate documents (for data exports)
+  # - semantic: Extract text-rich fields (for articles, documentation)
+  # - logs: Parse as structured log entries (for JSONL logs)
+  default_strategy: "auto"
+
+  # For "records" strategy: minimum array size to split into separate documents
+  min_array_size_for_splitting: 3
+
+  # For "semantic" strategy: fields to prioritize for text content
+  text_fields:
+    - "content"
+    - "body"
+    - "text"
+    - "description"
+    - "message"
+    - "summary"
+    - "details"
+    - "value"
+
+  title_fields:
+    - "title"
+    - "name"
+    - "subject"
+    - "heading"
+    - "label"
+    - "key"
+
+  # For "flatten" strategy: maximum nesting depth to prevent infinite recursion
+  max_nesting_depth: 10
+  flatten_separator: "."
+
+  # JSONL batch processing size
+  jsonl_batch_size: 1000
+
+  # Fields to always preserve in metadata (not just content)
+  preserve_fields:
+    - "id"
+    - "timestamp"
+    - "date"
+    - "created_at"
+    - "updated_at"
+    - "type"
+    - "category"
+    - "level"
+    - "status"
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Log to file (empty = console only)
+  file: ""
+
+  # Enable structured JSON logging
+  json_logging: false
+
+  # Quiet third-party library logs (huggingface, transformers, unstructured, etc.)
+  # Set to false to see all logs for debugging
+  quiet_third_party: true
+
+  # Enable colorized console output
+  # Colors: DEBUG=cyan, INFO=green, WARNING=yellow, ERROR=red, CRITICAL=bright red
+  # Automatically disabled when output is not a TTY or NO_COLOR env var is set
+  colorize: true
+
+# -----------------------------------------------------------------------------
+# Metrics & Observability Configuration
+# -----------------------------------------------------------------------------
+metrics:
+  # Enable metrics collection
+  enabled: true
+
+  # Enable detailed step timing
+  detailed_timing: true
+
+  # Store metrics history
+  store_history: false
+
+  # Metrics history retention (number of runs)
+  history_retention: 100
+
+# -----------------------------------------------------------------------------
+# Pipeline Feature Flags
+# -----------------------------------------------------------------------------
+pipeline:
+  # Enable planning agent
+  # Disabled: adds 12+ min overhead on Ollama Cloud; uses hardcoded hybrid default.
+  use_planning: false
+
+  # Enable query decomposition
+  # Disabled: turns 1 query into 3, driving 3× more LLM calls throughout the pipeline.
+  use_decomposition: false
+
+  # Enable query rewriting
+  use_rewrite: true
+
+  # Enable query expansion
+  use_expansion: true
+
+  # Enable RRF fusion
+  use_rrf: true
+
+  # Enable hierarchical auto-merging
+  use_automerge: true
+
+  # Enable cross-encoder reranking
+  use_rerank: true
+
+  # Enable critic evaluation
+  use_critic: false
+
+# -----------------------------------------------------------------------------
+# Web Crawler Configuration (for URL ingestion)
+# -----------------------------------------------------------------------------
+web_crawler:
+  # Maximum crawl depth (0 = seed URLs only, 1 = seed + direct links, etc.)
+  # Higher values crawl more pages but take longer
+  max_depth: 2
+
+  # Maximum total pages to crawl per session
+  max_pages: 100
+
+  # Only crawl pages from the same domain as seed URLs
+  # Set to false to allow cross-domain crawling
+  same_domain_only: true
+
+  # URL include patterns (regex) - URLs must match at least one pattern
+  # Leave empty to include all URLs (subject to other filters)
+  # Example: [".*\\.html$", ".*/docs/.*"]
+  include_patterns: []
+
+  # URL exclude patterns (regex) - URLs matching any pattern are skipped
+  # Common patterns to exclude: login pages, external links, etc.
+  # Example: [".*/login.*", ".*/logout.*", ".*\\?.*session.*"]
+  exclude_patterns:
+    - ".*\\.(jpg|jpeg|png|gif|svg|ico|css|js|woff|woff2|ttf|eot)$"
+    - ".*/login.*"
+    - ".*/logout.*"
+    - ".*/signin.*"
+    - ".*/signout.*"
+    - ".*/wp-json/.*"       # WordPress REST API endpoints
+    - ".*/api/.*"           # Generic API endpoints
+    - ".*/xmlrpc\\.php.*"   # WordPress XML-RPC
+    - ".*/cdn-cgi/.*"       # Cloudflare CDN scripts
+
+  # Request timeout in seconds
+  timeout: 30
+
+  # Delay between requests in seconds (rate limiting)
+  # Be respectful to servers - don't set this too low
+  delay: 0.5
+
+  # User agent string for HTTP requests
+  user_agent: "AgenticRAG-Crawler/1.0"
+
+  # Basic authentication credentials (leave empty if not required)
+  # For API key authentication, these can be repurposed or extended
+  basic_auth_user: ""
+  basic_auth_password: ""
+
+  # Verify SSL certificates (set to false for self-signed certs)
+  verify_ssl: true
+
+  # Temporary directory for downloaded files
+  # Leave empty to use system temp directory
+  temp_dir: ""
+
+  # Follow HTTP redirects
+  follow_redirects: true
+
+  # Maximum file size to download in bytes (0 = unlimited)
+  # Default: 50 MB
+  max_file_size: 50000000
+
+  # Respect robots.txt directives (future enhancement)
+  respect_robots_txt: true
+
+# -----------------------------------------------------------------------------
+# Web Search Configuration (Real-time during queries)
+# -----------------------------------------------------------------------------
+# Enables live web search during query processing to augment indexed content
+# with current information from the web.
+web_search:
+  # Enable/disable web search during queries
+  # When enabled, the PlanningAgent can decide to search the web
+  # Disabled: extra LLM call + network round-trip on every query.
+  enabled: false
+
+  # Maximum number of URLs to consider per query
+  max_results: 5
+
+  # Maximum pages to actually fetch (may be less if some fail)
+  max_pages: 3
+
+  # Request timeout for fetching pages (seconds)
+  timeout: 15
+
+  # User agent for web requests
+  user_agent: "AgenticRAG-WebSearch/1.0"
+
+  # Include web search results in answer synthesis
+  include_in_synthesis: true
+
+  # Minimum relevance score to include a result (0.0-1.0)
+  min_relevance: 0.3
+
+  # Search mode: "direct" uses LLM to suggest URLs
+  search_mode: "direct"
+
+  # Cache web search results
+  cache_enabled: true
+
+  # Cache TTL in seconds (default 1 hour)
+  cache_ttl: 3600
+
+  # Keywords that trigger web search (if empty, rely on planner)
+  # Queries containing these words may trigger web search
+  trigger_keywords:
+    - "latest"
+    - "recent"
+    - "current"
+    - "today"
+    - "news"
+    - "update"
+    - "new"
+    - "2024"
+    - "2025"
+    - "now"
+
+  # Preferred domains for search (optional, prioritized in results)
+  preferred_domains: []
+
+  # Domains to block from web search results
+  blocked_domains:
+    - "facebook.com"
+    - "twitter.com"
+    - "instagram.com"
+    - "tiktok.com"
+    - "pinterest.com"
