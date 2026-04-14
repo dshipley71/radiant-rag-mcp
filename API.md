@@ -1,4 +1,4 @@
-# RADIANT_RAG_API.md — Python API Reference
+# API.md — Python API Reference
 
 Developer guide for using `radiant-rag-mcp` directly from Python, without
 going through the MCP protocol layer.
