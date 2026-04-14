@@ -14,7 +14,7 @@ or **HTTP** for remote server and notebook deployments.
 ### Default backend — ChromaDB (no external service required)
 
 ```bash
-pip install "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
+pip install "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag-mcp.git"
 ```
 
 ChromaDB runs embedded in-process. No Docker, no database server.
@@ -22,7 +22,7 @@ ChromaDB runs embedded in-process. No Docker, no database server.
 ### Redis Stack backend
 
 ```bash
-pip install "radiant-rag-mcp[redis] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
+pip install "radiant-rag-mcp[redis] @ git+https://github.com/dshipley71/radiant-rag-mcp.git"
 ```
 
 Requires a running Redis Stack container (see [Docker commands](#docker-commands) below).
@@ -423,9 +423,8 @@ Note: the Ollama base URL must end in `/v1` for the OpenAI-compatible endpoint.
 ## Development
 
 ```bash
-git clone https://github.com/dshipley71/radiant-rag
-cd radiant-rag
-git checkout mcp
+git clone https://github.com/dshipley71/radiant-rag-mcp.git
+cd radiant-rag-mcp
 pip install -e ".[chroma,dev]"
 radiant-mcp --config config.yaml
 ```

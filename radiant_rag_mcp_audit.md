@@ -1,6 +1,6 @@
 # Radiant RAG MCP — Audit & Optimization Report
 
-**Status as of `mcp` branch, April 2026.**  
+**Status as of `main` branch, April 2026.**  
 Items marked ✅ are completed. Items marked 🔲 remain open.
 
 ---

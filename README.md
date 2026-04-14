@@ -139,22 +139,21 @@ BaseAgent (Abstract)
 - An OpenAI-compatible LLM endpoint (Ollama Cloud, local Ollama, vLLM, OpenAI, etc.)
 - Redis Stack (optional — only needed for the Redis backend)
 
-### Install from the `mcp` branch
+### Install
 
 ```bash
 # ChromaDB backend (default — no external service required)
-pip install "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
+pip install "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag-mcp.git"
 
 # Redis backend
-pip install "radiant-rag-mcp[redis] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
+pip install "radiant-rag-mcp[redis] @ git+https://github.com/dshipley71/radiant-rag-mcp.git"
 ```
 
 ### Development install (editable)
 
 ```bash
-git clone https://github.com/dshipley71/radiant-rag.git
-cd radiant-rag
-git checkout mcp
+git clone https://github.com/dshipley71/radiant-rag-mcp.git
+cd radiant-rag-mcp
 pip install -e ".[chroma,dev]"
 ```
 
@@ -199,7 +198,7 @@ Use the notebook at `notebooks/radiant_rag_mcp_colab_test.ipynb`.
 The install cell:
 
 ```python
-!pip install -q "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag.git@mcp"
+!pip install -q "radiant-rag-mcp[chroma] @ git+https://github.com/dshipley71/radiant-rag-mcp.git"
 !pip install -q --prefer-binary nest_asyncio httpx "fastmcp>=3.0"
 ```
 
@@ -522,7 +521,7 @@ count = app.rebuild_bm25_index()
 ## File Structure
 
 ```
-radiant-rag/  (mcp branch)
+radiant-rag-mcp/
 ├── config.yaml
 ├── pyproject.toml
 ├── README.md
