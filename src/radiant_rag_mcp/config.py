@@ -171,6 +171,62 @@ class VLMCaptionerConfig:
 
 
 @dataclass(frozen=True)
+class VideoProcessorConfig:
+    """Video processing configuration (yt-dlp, Whisper, OpenCV)."""
+
+    # Whisper transcription settings (env prefix: RADIANT_VIDEO_*)
+    whisper_model: str = "base"
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "int8"
+    whisper_language: str = "auto"
+
+    # Download / ingest limits
+    max_duration_seconds: int = 3600
+    ytdlp_format: str = "bestaudio/best"
+    ytdlp_format_video: str = "bestvideo[ext=mp4]/bestvideo/best"
+    download_dir: Optional[str] = None
+    cleanup_after_ingest: bool = True
+
+    # Silent-video / frame analysis
+    enable_silent_video_analysis: bool = True
+    enable_frame_captioning: bool = False
+
+    # Windowed frame sampling
+    window_duration_seconds: float = 10.0
+    window_overlap_seconds: float = 2.0
+    frames_per_window: int = 3
+    max_windows: int = 0
+
+    # Scene-change detection
+    enable_scene_change_detection: bool = True
+    scene_change_threshold: float = 0.25
+    scene_change_min_gap_seconds: float = 2.0
+
+    # Filmstrip tile dimensions
+    filmstrip_tile_width: int = 480
+    filmstrip_tile_height: int = 270
+
+    # Chunking parameters
+    chunk_duration_seconds: int = 60
+    chunk_overlap_seconds: int = 10
+
+
+@dataclass(frozen=True)
+class VideoSummarizationConfig:
+    """Video summarization configuration."""
+
+    summary_detail: str = "standard"
+    window_caption_sentences: int = 4
+    chapter_paragraphs_min: int = 1
+    chapter_paragraphs_max: int = 2
+    overall_paragraphs_min: int = 2
+    overall_paragraphs_max: int = 3
+    content_type_hint: str = "general"
+    chapter_gap_seconds: float = 120.0
+    max_chapter_duration_seconds: float = 300.0
+
+
+@dataclass(frozen=True)
 class LocalModelsConfig:
     """Local HuggingFace/sentence-transformers configuration."""
     embed_model_name: str = "sentence-transformers/all-MiniLM-L12-v2"
@@ -930,6 +986,8 @@ class AppConfig:
     performance: PerformanceConfig
     pipeline: PipelineConfig
     vlm: VLMCaptionerConfig
+    video: VideoProcessorConfig
+    video_summarization: VideoSummarizationConfig
     web_crawler: WebCrawlerConfig
     web_search: WebSearchConfig
 
@@ -1037,6 +1095,43 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         cache_dir=_get_config_value(data, "vlm", "cache_dir", None) or None,
         ollama_fallback_url=_get_config_value(data, "vlm", "ollama_fallback_url", "http://localhost:11434"),
         ollama_fallback_model=_get_config_value(data, "vlm", "ollama_fallback_model", "llava"),
+    )
+
+    video = VideoProcessorConfig(
+        whisper_model=_get_config_value(data, "video", "whisper_model", "base"),
+        whisper_device=_get_config_value(data, "video", "whisper_device", "auto"),
+        whisper_compute_type=_get_config_value(data, "video", "whisper_compute_type", "int8"),
+        whisper_language=_get_config_value(data, "video", "whisper_language", "auto"),
+        max_duration_seconds=_get_config_value(data, "video", "max_duration_seconds", 3600, _parse_int),
+        ytdlp_format=_get_config_value(data, "video", "ytdlp_format", "bestaudio/best"),
+        ytdlp_format_video=_get_config_value(data, "video", "ytdlp_format_video", "bestvideo[ext=mp4]/bestvideo/best"),
+        download_dir=_get_config_value(data, "video", "download_dir", None) or None,
+        cleanup_after_ingest=_get_config_value(data, "video", "cleanup_after_ingest", True, _parse_bool),
+        enable_silent_video_analysis=_get_config_value(data, "video", "enable_silent_video_analysis", True, _parse_bool),
+        enable_frame_captioning=_get_config_value(data, "video", "enable_frame_captioning", False, _parse_bool),
+        window_duration_seconds=_get_config_value(data, "video", "window_duration_seconds", 10.0, _parse_float),
+        window_overlap_seconds=_get_config_value(data, "video", "window_overlap_seconds", 2.0, _parse_float),
+        frames_per_window=_get_config_value(data, "video", "frames_per_window", 3, _parse_int),
+        max_windows=_get_config_value(data, "video", "max_windows", 0, _parse_int),
+        enable_scene_change_detection=_get_config_value(data, "video", "enable_scene_change_detection", True, _parse_bool),
+        scene_change_threshold=_get_config_value(data, "video", "scene_change_threshold", 0.25, _parse_float),
+        scene_change_min_gap_seconds=_get_config_value(data, "video", "scene_change_min_gap_seconds", 2.0, _parse_float),
+        filmstrip_tile_width=_get_config_value(data, "video", "filmstrip_tile_width", 480, _parse_int),
+        filmstrip_tile_height=_get_config_value(data, "video", "filmstrip_tile_height", 270, _parse_int),
+        chunk_duration_seconds=_get_config_value(data, "video", "chunk_duration_seconds", 60, _parse_int),
+        chunk_overlap_seconds=_get_config_value(data, "video", "chunk_overlap_seconds", 10, _parse_int),
+    )
+
+    video_summarization = VideoSummarizationConfig(
+        summary_detail=_get_config_value(data, "video_summarization", "summary_detail", "standard"),
+        window_caption_sentences=_get_config_value(data, "video_summarization", "window_caption_sentences", 4, _parse_int),
+        chapter_paragraphs_min=_get_config_value(data, "video_summarization", "chapter_paragraphs_min", 1, _parse_int),
+        chapter_paragraphs_max=_get_config_value(data, "video_summarization", "chapter_paragraphs_max", 2, _parse_int),
+        overall_paragraphs_min=_get_config_value(data, "video_summarization", "overall_paragraphs_min", 2, _parse_int),
+        overall_paragraphs_max=_get_config_value(data, "video_summarization", "overall_paragraphs_max", 3, _parse_int),
+        content_type_hint=_get_config_value(data, "video_summarization", "content_type_hint", "general"),
+        chapter_gap_seconds=_get_config_value(data, "video_summarization", "chapter_gap_seconds", 120.0, _parse_float),
+        max_chapter_duration_seconds=_get_config_value(data, "video_summarization", "max_chapter_duration_seconds", 300.0, _parse_float),
     )
 
     local_models = LocalModelsConfig(
@@ -1501,6 +1596,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         performance=performance,
         pipeline=pipeline,
         vlm=vlm,
+        video=video,
+        video_summarization=video_summarization,
         web_crawler=web_crawler,
         web_search=web_search,
     )
