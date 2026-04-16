@@ -1,7 +1,7 @@
 """
 Radiant RAG MCP server.
 
-Exposes ten tools via the Model Context Protocol (MCP) using FastMCP 2.x with
+Exposes eleven tools via the Model Context Protocol (MCP) using FastMCP 2.x with
 stdio transport, compatible with Claude Code and Claude Desktop.
 
 STDOUT PROHIBITION: The MCP stdio protocol uses stdout as the JSON-RPC channel.
@@ -442,6 +442,63 @@ async def set_ingest_mode(
         "hierarchical": hierarchical,
         "message": f"Ingest mode set to {mode_name!r}.  All subsequent ingest_documents calls will use {mode_name} storage by default.",
     }
+
+
+# ===========================================================================
+# Tool 11 — ingest_video
+# ===========================================================================
+@mcp.tool()
+async def ingest_video(
+    ctx: Context,
+    sources: List[str],
+    hierarchical: bool = True,
+    child_chunk_size: int = 512,
+    child_chunk_overlap: int = 50,
+    enable_frame_captioning: bool = False,
+    force_frame_analysis: bool = False,
+    summarize: bool = False,
+) -> Dict[str, Any]:
+    """
+    Ingest one or more videos into the RAG knowledge base.
+
+    Sources may be local file paths (.mp4, .mkv, .webm, .mov, .avi, etc.)
+    or any URL supported by yt-dlp (YouTube, Vimeo, Twitch clips, etc.).
+    Processing path is chosen automatically:
+    - Videos with audio:  Whisper transcription → transcript chunks
+    - Silent videos:      VLM frame-window analysis → caption chunks
+    - force_frame_analysis: always use VLM regardless of audio presence
+
+    Args:
+        sources:               One or more video file paths or URLs.
+        hierarchical:          ``True`` (default) for hierarchical parent/child
+                               chunk storage; ``False`` for flat storage.
+        child_chunk_size:      Size of child chunks (default 512).
+        child_chunk_overlap:   Overlap between child chunks (default 50).
+        enable_frame_captioning: Enable per-frame VLM captioning in addition
+                               to window-level captions.
+        force_frame_analysis:  Always use VLM frame analysis even when audio
+                               is present.
+        summarize:             Generate a VideoSummaryResult for each source
+                               and include it in the returned stats.
+
+    Returns:
+        Ingestion statistics dict with ``sources_processed``,
+        ``sources_failed``, ``chunks_created``, ``documents_stored``,
+        ``silent_sources``, ``audio_sources``, ``summaries``, and ``errors``.
+    """
+    app = ctx.lifespan_context["app"]
+    result = await asyncio.to_thread(
+        app.ingest_videos,
+        sources,
+        show_progress=False,
+        use_hierarchical=hierarchical,
+        child_chunk_size=child_chunk_size,
+        child_chunk_overlap=child_chunk_overlap,
+        enable_frame_captioning=enable_frame_captioning,
+        force_frame_analysis=force_frame_analysis,
+        summarize=summarize,
+    )
+    return result
 
 
 # ===========================================================================

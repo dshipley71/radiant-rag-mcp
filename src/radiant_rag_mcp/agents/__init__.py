@@ -136,6 +136,13 @@ from radiant_rag_mcp.agents.translation import (
     TranslationError,
 )
 
+# Video summarization (new)
+from radiant_rag_mcp.agents.video_summarization import (
+    VideoSummarizationAgent,
+    VideoSummaryResult,
+    VideoChapter,
+)
+
 __all__ = [
     # Base agent classes
     "AgentCategory",
@@ -215,4 +222,8 @@ __all__ = [
     "TranslationAgent",
     "TranslationResult",
     "TranslationError",
+    # Video summarization
+    "VideoSummarizationAgent",
+    "VideoSummaryResult",
+    "VideoChapter",
 ]

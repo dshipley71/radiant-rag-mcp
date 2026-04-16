@@ -324,6 +324,76 @@ class RadiantRAG:
 
         return stats
 
+    def ingest_videos(
+        self,
+        sources: List[str],
+        show_progress: bool = True,
+        use_hierarchical: bool = True,
+        child_chunk_size: int = 512,
+        child_chunk_overlap: int = 50,
+        enable_frame_captioning: bool = False,
+        force_frame_analysis: bool = False,
+        summarize: bool = False,
+    ) -> Dict[str, Any]:
+        """Ingest videos into the RAG system."""
+        from radiant_rag_mcp.ingestion.video_processor import VideoProcessor
+        from dataclasses import replace
+
+        video_cfg = self._config.video
+        if enable_frame_captioning != video_cfg.enable_frame_captioning:
+            video_cfg = replace(video_cfg, enable_frame_captioning=enable_frame_captioning)
+
+        captioner = self._image_captioner if (
+            enable_frame_captioning or video_cfg.enable_silent_video_analysis
+        ) else None
+
+        processor = VideoProcessor(config=video_cfg, image_captioner=captioner)
+        stats: Dict[str, Any] = {
+            "sources_processed": 0,
+            "sources_failed": 0,
+            "chunks_created": 0,
+            "documents_stored": 0,
+            "silent_sources": 0,
+            "audio_sources": 0,
+            "summaries": {},
+            "errors": [],
+        }
+
+        for source in sources:
+            try:
+                chunks = processor.process_video(source,
+                            force_frame_analysis=force_frame_analysis)
+                if not chunks:
+                    stats["sources_failed"] += 1
+                    stats["errors"].append(f"No chunks from: {source}")
+                    continue
+                ctypes = {c.meta.get("content_type") for c in chunks}
+                if "frame_window_captions" in ctypes:
+                    stats["silent_sources"] += 1
+                if "transcript" in ctypes:
+                    stats["audio_sources"] += 1
+                stats["sources_processed"] += 1
+                stats["chunks_created"] += len(chunks)
+                stored = (self._ingest_hierarchical(source, chunks,
+                              child_chunk_size, child_chunk_overlap)
+                          if use_hierarchical else self._ingest_flat(chunks))
+                stats["documents_stored"] += stored
+                if summarize:
+                    from radiant_rag_mcp.agents.video_summarization import VideoSummarizationAgent
+                    agent = VideoSummarizationAgent(
+                        llm=self._llm_clients.chat,
+                        config=self._config.video_summarization)
+                    result = agent.summarize_video(source, chunks)
+                    stats["summaries"][source] = result.__dict__
+            except Exception as e:
+                logger.error(f"Failed to ingest video {source}: {e}")
+                stats["sources_failed"] += 1
+                stats["errors"].append(f"{source}: {e}")
+
+        self._bm25_index.sync_with_store()
+        self._bm25_index.save()
+        return stats
+
     def _ingest_flat(self, chunks: List[IngestedChunk]) -> int:
         """Ingest chunks without hierarchical structure using batch processing."""
         if not chunks:
