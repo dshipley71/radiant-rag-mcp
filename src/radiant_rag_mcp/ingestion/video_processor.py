@@ -5,7 +5,7 @@ Handles YouTube URLs and local video files.  Provides:
   - Audio transcription via faster-whisper (preferred) or openai-whisper
   - yt-dlp download helper for YouTube
   - Time-windowed IngestedChunk output compatible with the RAG pipeline
-  - Silent-video / frame-captioning path (stubs — not yet implemented)
+  - Silent-video / frame-captioning path (frame extraction, filmstrip tiling, VLM captioning)
 
 Usage::
 
@@ -135,10 +135,13 @@ class VideoSegment:
 class FrameWindow:
     """A temporal window of video frames used for silent-video analysis."""
 
-    start: float                           # Window start time in seconds
-    end: float                             # Window end time in seconds
+    start: float                                    # Window start time in seconds
+    end: float                                      # Window end time in seconds
     frame_paths: List[str] = field(default_factory=list)
-    caption: Optional[str] = None          # VLM caption for the window
+    caption: Optional[str] = None                   # VLM caption for the window
+    frame_timestamps: List[float] = field(default_factory=list)   # Timestamps of extracted frames
+    per_frame_captions: List[str] = field(default_factory=list)   # Per-frame VLM captions
+    is_scene_boundary: bool = False                 # True if window starts at a scene change
 
 
 @dataclass
@@ -172,9 +175,10 @@ class VideoProcessor:
         Videos with audio are transcribed with faster-whisper (preferred) or
         openai-whisper and split into time-windowed IngestedChunk objects.
 
-    Silent-video / frame-captioning path (stubs):
-        All frame-analysis methods raise NotImplementedError and will be
-        implemented in a future release.
+    Silent-video / frame-captioning path (fully implemented):
+        Silent videos (no audio) are processed by sampling frames into
+        time windows, optionally splitting at scene changes, tiling frames
+        into filmstrips, and captioning via the injected VLM captioner.
     """
 
     def __init__(
@@ -187,11 +191,11 @@ class VideoProcessor:
 
         Args:
             config: VideoProcessorConfig instance controlling all behaviour.
-            image_captioner: Optional VLM captioner injected for frame
-                captions (used by the silent-video path once implemented).
+            image_captioner: Optional VLM captioner for frame captions.
+                Required for the silent-video analysis path.
         """
         self._config = config
-        self._image_captioner = image_captioner
+        self._captioner = image_captioner
 
         # Whisper model — loaded lazily via _load_whisper()
         self._whisper_model: Optional[Any] = None
@@ -839,7 +843,7 @@ class VideoProcessor:
         )
 
     # ------------------------------------------------------------------
-    # Silent-video path — stubs (not yet implemented)
+    # Silent-video path — frame analysis and captioning
     # ------------------------------------------------------------------
 
     def _process_silent_video(
@@ -848,62 +852,542 @@ class VideoProcessor:
         metadata: VideoMetadata,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> List["IngestedChunk"]:
-        """Stub: full silent-video frame-analysis path not yet implemented."""
-        raise NotImplementedError(
-            "_process_silent_video is not yet implemented."
+        """
+        Run the full silent-video frame-analysis pipeline.
+
+        Args:
+            video_path: Path to the video file.
+            metadata: VideoMetadata for the source.
+            extra_meta: Extra key/value pairs merged into every chunk.
+
+        Returns:
+            List of IngestedChunk objects.
+
+        Raises:
+            RuntimeError: If no image captioner is configured.
+        """
+        if not self._captioner:
+            raise RuntimeError(
+                "An image_captioner is required for silent video processing. "
+                "Provide a VLM captioner (e.g. HuggingFaceVLMCaptioner) when "
+                "constructing VideoProcessor(config, image_captioner=<captioner>)."
+            )
+
+        scene_changes = self._detect_scene_changes(video_path)
+        windows = self._build_windows(metadata.duration, scene_changes)
+
+        if not windows:
+            logger.warning(
+                "No windows built for %s (duration=%.1f); returning empty result.",
+                video_path, metadata.duration,
+            )
+            return []
+
+        frame_windows = self._analyse_windows(
+            video_path, windows, scene_changes, metadata
         )
+        return self._chunks_from_frame_windows(frame_windows, metadata, extra_meta)
 
     def _detect_scene_changes(self, video_path: str) -> List[float]:
-        """Stub: scene-change detection not yet implemented."""
-        raise NotImplementedError(
-            "_detect_scene_changes is not yet implemented."
-        )
+        """
+        Detect scene-change timestamps in *video_path*.
+
+        Tries PySceneDetect first; falls back to a per-second grayscale MAD
+        comparison using OpenCV + NumPy; returns [] if neither is available.
+
+        Args:
+            video_path: Path to the video file.
+
+        Returns:
+            Sorted list of scene-change timestamps in seconds.
+        """
+        cfg = self._config
+        threshold = cfg.scene_change_threshold    # 0–1
+        min_gap = cfg.scene_change_min_gap_seconds
+
+        # 1. PySceneDetect (ContentDetector threshold is 0–100)
+        if SCENEDETECT_AVAILABLE:
+            try:
+                from scenedetect import detect, ContentDetector  # type: ignore[import]
+                scene_list = detect(
+                    video_path,
+                    ContentDetector(threshold=threshold * 100.0),
+                )
+                # Each element is (start_timecode, end_timecode); skip the
+                # first scene which begins at t=0.
+                raw: List[float] = [
+                    scene[0].get_seconds() for scene in scene_list[1:]
+                ]
+                filtered: List[float] = []
+                last_t = -(min_gap + 1.0)
+                for t in sorted(raw):
+                    if t - last_t >= min_gap:
+                        filtered.append(t)
+                        last_t = t
+                logger.debug(
+                    "PySceneDetect: %d scene changes in %s", len(filtered), video_path
+                )
+                return filtered
+            except Exception as exc:
+                logger.warning(
+                    "PySceneDetect failed for %s (%s); falling back to numpy.",
+                    video_path, exc,
+                )
+
+        # 2. NumPy + OpenCV fallback: sample at ~1 fps, normalised grayscale MAD
+        if not (CV2_AVAILABLE and NUMPY_AVAILABLE):
+            logger.debug(
+                "OpenCV+NumPy unavailable; returning empty scene changes for %s.",
+                video_path,
+            )
+            return []
+
+        try:
+            cap = _cv2.VideoCapture(video_path)
+            fps = cap.get(_cv2.CAP_PROP_FPS) or 25.0
+            sample_interval = max(1, int(round(fps)))  # one frame per second
+
+            prev_gray = None
+            frame_idx = 0
+            diffs: List[float] = []
+            sample_times: List[float] = []
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_idx % sample_interval == 0:
+                    gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+                    t = frame_idx / fps
+                    if prev_gray is not None:
+                        mad = float(
+                            _numpy.mean(
+                                _numpy.abs(
+                                    gray.astype(_numpy.float32)
+                                    - prev_gray.astype(_numpy.float32)
+                                )
+                            )
+                        ) / 255.0  # normalise to [0, 1]
+                        diffs.append(mad)
+                        sample_times.append(t)
+                    prev_gray = gray
+                frame_idx += 1
+
+            cap.release()
+
+            if not diffs:
+                return []
+
+            changes: List[float] = []
+            last_t = -(min_gap + 1.0)
+            for mad, t in zip(diffs, sample_times):
+                if mad >= threshold and t - last_t >= min_gap:
+                    changes.append(t)
+                    last_t = t
+
+            logger.debug(
+                "NumPy fallback: %d scene changes in %s", len(changes), video_path
+            )
+            return changes
+
+        except Exception as exc:
+            logger.warning(
+                "NumPy scene detection failed for %s: %s", video_path, exc
+            )
+            return []
 
     def _build_windows(
         self,
         duration: float,
         scene_changes: Optional[List[float]] = None,
-    ) -> List[FrameWindow]:
-        """Stub: window-building not yet implemented."""
-        raise NotImplementedError("_build_windows is not yet implemented.")
+    ) -> List[Tuple[float, float]]:
+        """
+        Build temporal windows over *duration*, splitting at scene changes.
+
+        A fixed grid is produced first (step = window_duration − overlap).
+        Each scene change that does NOT land within *overlap* seconds of a
+        window edge causes that window to be split: the first sub-window ends
+        at the scene change and the second starts at ``sc − overlap`` to
+        preserve context.
+
+        Args:
+            duration: Total video duration in seconds.
+            scene_changes: Optional list of scene-change timestamps.
+
+        Returns:
+            Ordered list of (start, end) tuples clipped to [0, duration]
+            with windows shorter than *overlap_seconds* removed.
+        """
+        cfg = self._config
+        window_dur = cfg.window_duration_seconds
+        overlap = cfg.window_overlap_seconds
+        max_wins = cfg.max_windows
+
+        step = window_dur - overlap
+        if step <= 0:
+            step = window_dur
+
+        # --- Build fixed grid ---
+        windows: List[Tuple[float, float]] = []
+        cursor = 0.0
+        while cursor < duration:
+            win_end = cursor + window_dur
+            windows.append((cursor, win_end))
+            if win_end >= duration:
+                break
+            cursor += step
+
+        # --- Apply scene-change splits ---
+        if scene_changes:
+            for sc in sorted(scene_changes):
+                new_windows: List[Tuple[float, float]] = []
+                for a, b in windows:
+                    if a < sc < b:
+                        near_start = (sc - a) <= overlap
+                        near_end = (b - sc) <= overlap
+                        if not near_start and not near_end:
+                            # Split: first part [a, sc], second [sc-overlap, b]
+                            second_start = max(sc - overlap, a)
+                            new_windows.append((a, sc))
+                            new_windows.append((second_start, b))
+                        else:
+                            new_windows.append((a, b))
+                    else:
+                        new_windows.append((a, b))
+                windows = new_windows
+
+        # --- Clip to [0, duration], drop short windows ---
+        result: List[Tuple[float, float]] = []
+        for a, b in windows:
+            a_c = max(0.0, a)
+            b_c = min(b, duration)
+            if b_c - a_c >= overlap:
+                result.append((a_c, b_c))
+
+        # --- Cap total number of windows ---
+        if max_wins > 0 and len(result) > max_wins:
+            result = result[:max_wins]
+
+        logger.debug(
+            "Built %d windows for duration=%.1f (scene_changes=%s)",
+            len(result), duration, len(scene_changes) if scene_changes else 0,
+        )
+        return result
 
     def _extract_window_frames(
         self,
         video_path: str,
-        window: FrameWindow,
-    ) -> FrameWindow:
-        """Stub: frame extraction not yet implemented."""
-        raise NotImplementedError(
-            "_extract_window_frames is not yet implemented."
-        )
+        start: float,
+        end: float,
+    ) -> List[Tuple[float, Any]]:
+        """
+        Extract uniformly-spaced frames from a window of a video file.
 
-    def _tile_filmstrip(self, frame_paths: List[str]) -> Any:
-        """Stub: filmstrip tiling not yet implemented."""
-        raise NotImplementedError("_tile_filmstrip is not yet implemented.")
+        Args:
+            video_path: Path to the video file.
+            start: Window start time in seconds.
+            end: Window end time in seconds.
+
+        Returns:
+            List of (timestamp, PIL.Image) tuples.  The images are resized
+            to (filmstrip_tile_width × filmstrip_tile_height).
+
+        Raises:
+            RuntimeError: If OpenCV or Pillow is unavailable.
+        """
+        if not CV2_AVAILABLE:
+            raise RuntimeError(
+                "OpenCV (cv2) is required for frame extraction. "
+                "Install with: pip install opencv-python-headless"
+            )
+        if not PIL_AVAILABLE:
+            raise RuntimeError(
+                "Pillow is required for frame extraction. "
+                "Install with: pip install Pillow"
+            )
+
+        cfg = self._config
+        n = cfg.frames_per_window
+        tile_w = cfg.filmstrip_tile_width
+        tile_h = cfg.filmstrip_tile_height
+        duration = end - start
+
+        # Compute uniformly-spaced seek timestamps
+        if n <= 1:
+            timestamps = [start + duration / 2.0]
+        else:
+            timestamps = [
+                start + i * duration / (n - 1)
+                for i in range(n)
+            ]
+
+        results: List[Tuple[float, Any]] = []
+        cap = _cv2.VideoCapture(video_path)
+        try:
+            for ts in timestamps:
+                # Clamp slightly inside the window to avoid seeking past EOF
+                seek_ms = min(ts, end - 0.033) * 1000.0
+                cap.set(_cv2.CAP_PROP_POS_MSEC, seek_ms)
+                ret, frame = cap.read()
+                if not ret:
+                    logger.debug(
+                        "Frame read failed at ts=%.3fs in %s", ts, video_path
+                    )
+                    continue
+                rgb = _cv2.cvtColor(frame, _cv2.COLOR_BGR2RGB)
+                img = _PIL_Image.fromarray(rgb)
+                img = img.resize((tile_w, tile_h), _PIL_Image.LANCZOS)
+                results.append((ts, img))
+        finally:
+            cap.release()
+
+        return results
+
+    def _tile_filmstrip(self, frames: List[Any]) -> Any:
+        """
+        Tile *frames* horizontally into a single PIL.Image filmstrip.
+
+        A 2-pixel separator in colour (40, 40, 40) is drawn between tiles.
+
+        Args:
+            frames: List of PIL.Image objects, each pre-sized to
+                (filmstrip_tile_width × filmstrip_tile_height).
+
+        Returns:
+            RGB PIL.Image of size (N*tile_w + (N-1)*2, tile_h).
+
+        Raises:
+            RuntimeError: If Pillow is unavailable.
+        """
+        if not PIL_AVAILABLE:
+            raise RuntimeError(
+                "Pillow is required for filmstrip tiling. "
+                "Install with: pip install Pillow"
+            )
+
+        cfg = self._config
+        tile_w = cfg.filmstrip_tile_width
+        tile_h = cfg.filmstrip_tile_height
+        n = len(frames)
+
+        if n == 0:
+            return _PIL_Image.new("RGB", (tile_w, tile_h), (0, 0, 0))
+
+        separator_w = 2
+        total_width = n * tile_w + (n - 1) * separator_w
+        filmstrip = _PIL_Image.new("RGB", (total_width, tile_h), (0, 0, 0))
+
+        x = 0
+        for i, frame in enumerate(frames):
+            filmstrip.paste(frame.convert("RGB"), (x, 0))
+            x += tile_w
+            if i < n - 1:
+                sep = _PIL_Image.new("RGB", (separator_w, tile_h), (40, 40, 40))
+                filmstrip.paste(sep, (x, 0))
+                x += separator_w
+
+        return filmstrip
 
     def _save_filmstrip_to_temp(self, filmstrip: Any) -> str:
-        """Stub: filmstrip saving not yet implemented."""
-        raise NotImplementedError(
-            "_save_filmstrip_to_temp is not yet implemented."
-        )
+        """
+        Save *filmstrip* as a temporary PNG file.
 
-    def _caption_window(self, window: FrameWindow) -> Optional[str]:
-        """Stub: window captioning not yet implemented."""
-        raise NotImplementedError("_caption_window is not yet implemented.")
+        The caller is responsible for deleting the file when done.
 
-    def _caption_single_frame(self, frame_path: str) -> Optional[str]:
-        """Stub: single-frame captioning not yet implemented."""
-        raise NotImplementedError(
-            "_caption_single_frame is not yet implemented."
-        )
+        Args:
+            filmstrip: PIL.Image to save.
+
+        Returns:
+            Absolute path to the temporary PNG file.
+        """
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        filmstrip.save(tmp.name, format="PNG")
+        return tmp.name
+
+    def _caption_single_frame(self, frame: Any, timestamp: float) -> str:
+        """
+        Caption a single PIL.Image frame via the VLM captioner.
+
+        Saves the frame to a temporary PNG, calls
+        ``self._captioner.caption_image(path)``, then deletes the file.
+
+        Args:
+            frame: PIL.Image of the frame.
+            timestamp: Frame timestamp in seconds (used for logging).
+
+        Returns:
+            Caption string, or "" if captioning fails or captioner is absent.
+        """
+        if self._captioner is None:
+            return ""
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        try:
+            frame.save(tmp.name, format="PNG")
+            caption = self._captioner.caption_image(tmp.name) or ""
+        except Exception as exc:
+            logger.warning(
+                "Single-frame caption failed at ts=%.2fs: %s", timestamp, exc
+            )
+            caption = ""
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+        return caption
+
+    def _caption_window(
+        self,
+        frames: List[Any],
+        window_start: float,
+        window_end: float,
+        metadata: VideoMetadata,
+    ) -> Tuple[str, List[str]]:
+        """
+        Caption a window by tiling its frames into a filmstrip and querying
+        the VLM captioner with a structured prompt.
+
+        Args:
+            frames: List of PIL.Image objects for the window.
+            window_start: Window start time in seconds.
+            window_end: Window end time in seconds.
+            metadata: VideoMetadata describing the source.
+
+        Returns:
+            Tuple of (window_caption, per_frame_captions).  If captioner is
+            absent or frames is empty, returns ("", []).
+        """
+        cfg = self._config
+        n = len(frames)
+
+        if n == 0 or self._captioner is None:
+            return "", []
+
+        filmstrip = self._tile_filmstrip(frames)
+        filmstrip_path = self._save_filmstrip_to_temp(filmstrip)
+        per_frame_captions: List[str] = []
+
+        try:
+            window_duration = window_end - window_start
+            sentences = cfg.window_caption_sentences
+
+            system_text = (
+                f"You are a video content analyst. You will be shown a filmstrip "
+                f"of {n} frames sampled at equal intervals from a "
+                f"{window_duration:.1f}-second window of a silent video (no spoken "
+                f"audio). Frames are arranged left-to-right in chronological order, "
+                f"separated by thin vertical lines. Describe what is happening across "
+                f"these frames in {sentences} focused sentences. Include: the main "
+                f"subjects and their actions or states, any changes or transitions "
+                f"visible, the setting or environment, any text, labels, symbols, or "
+                f"data visible on screen. Be specific: use proper nouns, quantities, "
+                f"technical terms, and spatial references. Do not speculate about audio."
+            )
+            user_text = (
+                f"Video: {metadata.title}\n"
+                f"Time window: {window_start:.1f}s to {window_end:.1f}s "
+                f"(total duration: {metadata.duration:.0f}s)\n"
+                f"[filmstrip image]"
+            )
+            window_prompt = f"{system_text}\n\n{user_text}"
+
+            # caption_image() takes a FILE PATH (str), not a PIL.Image
+            caption = (
+                self._captioner.caption_image(filmstrip_path, prompt=window_prompt)
+                or ""
+            )
+
+            # Optional per-frame captions
+            if cfg.enable_frame_captioning:
+                if n > 1:
+                    frame_ts = [
+                        window_start + i * (window_end - window_start) / (n - 1)
+                        for i in range(n)
+                    ]
+                else:
+                    frame_ts = [window_start + (window_end - window_start) / 2.0]
+                for frame, ts in zip(frames, frame_ts):
+                    per_frame_captions.append(self._caption_single_frame(frame, ts))
+
+        finally:
+            try:
+                os.unlink(filmstrip_path)
+            except OSError:
+                pass
+
+        return caption, per_frame_captions
 
     def _analyse_windows(
         self,
-        windows: List[FrameWindow],
         video_path: str,
+        windows: List[Tuple[float, float]],
+        scene_changes: Optional[List[float]],
+        metadata: VideoMetadata,
     ) -> List[FrameWindow]:
-        """Stub: window analysis not yet implemented."""
-        raise NotImplementedError("_analyse_windows is not yet implemented.")
+        """
+        Extract frames and caption every window in *windows*.
+
+        Args:
+            video_path: Path to the video file.
+            windows: Ordered list of (start, end) tuples from _build_windows.
+            scene_changes: Scene-change timestamps for boundary detection.
+            metadata: VideoMetadata describing the source.
+
+        Returns:
+            List of populated FrameWindow objects (failures are skipped with
+            a warning log).
+        """
+        result: List[FrameWindow] = []
+        total = len(windows)
+        half_gap = max(self._config.scene_change_min_gap_seconds / 2.0, 0.5)
+
+        for i, (start, end) in enumerate(windows):
+            logger.info(
+                "VideoProcessor: window %d/%d [%.1fs-%.1fs]",
+                i + 1, total, start, end,
+            )
+            try:
+                frame_results = self._extract_window_frames(video_path, start, end)
+
+                if not frame_results:
+                    logger.warning(
+                        "No frames extracted for window [%.1f-%.1f]; skipping.",
+                        start, end,
+                    )
+                    continue
+
+                frames = [img for _ts, img in frame_results]
+                timestamps = [ts for ts, _img in frame_results]
+
+                caption, per_frame_captions = self._caption_window(
+                    frames, start, end, metadata
+                )
+
+                is_scene_boundary = any(
+                    abs(start - sc) <= half_gap for sc in (scene_changes or [])
+                )
+
+                result.append(FrameWindow(
+                    start=start,
+                    end=end,
+                    frame_paths=[],
+                    caption=caption,
+                    frame_timestamps=timestamps,
+                    per_frame_captions=per_frame_captions,
+                    is_scene_boundary=is_scene_boundary,
+                ))
+
+            except Exception as exc:
+                logger.warning(
+                    "Window %d/%d [%.1fs-%.1fs] processing failed: %s",
+                    i + 1, total, start, end, exc,
+                )
+
+        return result
 
     def _chunks_from_frame_windows(
         self,
@@ -911,7 +1395,58 @@ class VideoProcessor:
         metadata: VideoMetadata,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> List["IngestedChunk"]:
-        """Stub: frame-window chunking not yet implemented."""
-        raise NotImplementedError(
-            "_chunks_from_frame_windows is not yet implemented."
+        """
+        Convert captioned FrameWindow objects to IngestedChunk objects.
+
+        Each chunk's content is ``"[start-end] caption"``; its meta carries
+        all keys required by the retrieval pipeline.
+
+        Args:
+            windows: List of captioned FrameWindow objects.
+            metadata: VideoMetadata describing the source.
+            extra_meta: Extra key/value pairs merged into every chunk.
+
+        Returns:
+            List of IngestedChunk objects.
+        """
+        from radiant_rag_mcp.ingestion.processor import IngestedChunk
+
+        if not windows:
+            return []
+
+        total_chunks = len(windows)
+        chunks: List[IngestedChunk] = []
+
+        for idx, w in enumerate(windows):
+            caption = w.caption or ""
+            text = f"[{w.start:.1f}s-{w.end:.1f}s] {caption}".strip()
+            if not text:
+                continue
+
+            meta: Dict[str, Any] = {
+                "source": metadata.source,
+                "title": metadata.title,
+                "duration": metadata.duration,
+                "is_silent": True,
+                "window_index": idx,
+                "start_time": w.start,
+                "end_time": w.end,
+                "frame_timestamps": w.frame_timestamps,
+                "is_scene_boundary": w.is_scene_boundary,
+                "file_type": "video",
+                "content_type": "frame_window_captions",
+                "chunk_index": idx,
+                "total_chunks": total_chunks,
+                "video_id": metadata.video_id,
+                "is_youtube": metadata.is_youtube,
+            }
+            if extra_meta:
+                meta.update(extra_meta)
+
+            chunks.append(IngestedChunk(content=text, meta=meta))
+
+        logger.info(
+            "Produced %d frame-window chunks from %d windows (source=%s)",
+            len(chunks), len(windows), metadata.source,
         )
+        return chunks
