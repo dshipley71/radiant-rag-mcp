@@ -39,6 +39,18 @@ from radiant_rag_mcp.ingestion.code_chunker import (
     chunk_code_file,
 )
 from radiant_rag_mcp.ingestion.image_captioner import ImageCaptioner, VLMConfig, create_captioner
+from radiant_rag_mcp.ingestion.video_processor import (
+    VideoProcessor,
+    VideoSegment,
+    FrameWindow,
+    VideoMetadata,
+    VIDEO_EXTENSIONS,
+    YTDLP_AVAILABLE,
+    FASTER_WHISPER_AVAILABLE,
+    OPENAI_WHISPER_AVAILABLE,
+    CV2_AVAILABLE,
+    SCENEDETECT_AVAILABLE,
+)
 
 __all__ = [
     # Processor
@@ -69,4 +81,15 @@ __all__ = [
     "ImageCaptioner",
     "VLMConfig",
     "create_captioner",
+    # Video processor
+    "VideoProcessor",
+    "VideoSegment",
+    "FrameWindow",
+    "VideoMetadata",
+    "VIDEO_EXTENSIONS",
+    "YTDLP_AVAILABLE",
+    "FASTER_WHISPER_AVAILABLE",
+    "OPENAI_WHISPER_AVAILABLE",
+    "CV2_AVAILABLE",
+    "SCENEDETECT_AVAILABLE",
 ]

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
-from radiant_rag_mcp.config import UnstructuredCleaningConfig, JSONParsingConfig
+from radiant_rag_mcp.config import UnstructuredCleaningConfig, JSONParsingConfig, VideoProcessorConfig
 
 if TYPE_CHECKING:
     from radiant_rag_mcp.ingestion.image_captioner import ImageCaptioner
@@ -33,6 +33,8 @@ except ImportError:
 
 # Image extensions for captioning
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".flv", ".wmv", ".ts"}
 
 # Try to import JSON parser
 try:
@@ -474,6 +476,7 @@ class DocumentProcessor:
         chunk_overlap: int = 50,
         image_captioner: Optional["ImageCaptioner"] = None,
         json_config: Optional[JSONParsingConfig] = None,
+        video_config: Optional[VideoProcessorConfig] = None,
     ) -> None:
         """
         Initialize document processor.
@@ -485,12 +488,14 @@ class DocumentProcessor:
             chunk_overlap: Chunk overlap
             image_captioner: Optional VLM captioner for image files
             json_config: JSON/JSONL parsing configuration
+            video_config: Optional VideoProcessorConfig for video files
         """
         self._cleaning = CleaningOptions.from_config(cleaning_config)
         self._strategy = strategy
         self._splitter = ChunkSplitter(chunk_size, chunk_overlap)
         self._preview_config = cleaning_config
         self._captioner = image_captioner
+        self._video_cfg = video_config
 
         # Initialize JSON parser if available and enabled
         self._json_parser = None
@@ -530,6 +535,15 @@ class DocumentProcessor:
         """
         # Determine parsing method
         path = Path(file_path)
+
+        if path.suffix.lower() in VIDEO_EXTENSIONS:
+            try:
+                from radiant_rag_mcp.ingestion.video_processor import VideoProcessor
+                vp = VideoProcessor(config=self._video_cfg or VideoProcessorConfig())
+                return vp.process_video(str(path))
+            except Exception as e:
+                logger.warning(f"Video processing failed for {path}: {e}")
+                return []
 
         if path.suffix.lower() in (".json", ".jsonl") and self._json_parser:
             # JSON/JSONL files - use JSON parser
