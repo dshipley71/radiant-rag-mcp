@@ -210,6 +210,9 @@ class VideoProcessorConfig:
     chunk_duration_seconds: int = 60
     chunk_overlap_seconds: int = 10
 
+    # Window captioning (shared with VideoSummarizationConfig; env: RADIANT_VIDEO_SUMMARIZATION_WINDOW_CAPTION_SENTENCES)
+    window_caption_sentences: int = 4
+
 
 @dataclass(frozen=True)
 class VideoSummarizationConfig:
@@ -1120,6 +1123,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         filmstrip_tile_height=_get_config_value(data, "video", "filmstrip_tile_height", 270, _parse_int),
         chunk_duration_seconds=_get_config_value(data, "video", "chunk_duration_seconds", 60, _parse_int),
         chunk_overlap_seconds=_get_config_value(data, "video", "chunk_overlap_seconds", 10, _parse_int),
+        window_caption_sentences=_get_config_value(data, "video_summarization", "window_caption_sentences", 4, _parse_int),
     )
 
     video_summarization = VideoSummarizationConfig(
