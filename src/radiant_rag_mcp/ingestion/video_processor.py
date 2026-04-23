@@ -1,9 +1,11 @@
 """
 Video processing for Radiant Agentic RAG.
 
-Handles YouTube URLs and local video files.  Provides:
+Handles any remote video URL supported by yt-dlp (YouTube, Twitter/X,
+TikTok, Instagram, Vimeo, Twitch, Reddit, and 1 000+ other sites) as well
+as local video files.  Provides:
   - Audio transcription via faster-whisper (preferred) or openai-whisper
-  - yt-dlp download helper for YouTube
+  - yt-dlp download helper for any supported remote URL
   - Time-windowed IngestedChunk output compatible with the RAG pipeline
   - Silent-video / frame-captioning path (frame extraction, filmstrip tiling, VLM captioning)
 
@@ -14,6 +16,7 @@ Usage::
 
     vp = VideoProcessor(VideoProcessorConfig())
     chunks = vp.process_video("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    chunks = vp.process_video("https://twitter.com/i/status/2047129605996192012")
 
 LLM access (when needed by future paths): use ``self._llm_clients.chat``
 not ``self._llm_client``.
@@ -115,6 +118,11 @@ _YOUTUBE_RE: List[re.Pattern[str]] = [
     re.compile(r"(?:https?://)?youtu\.be/[\w-]+"),
 ]
 
+# Pattern that matches any remote URL (http / https) — used to route to yt-dlp
+# rather than the local-file path.  yt-dlp handles 1 000+ sites, so we simply
+# check for an HTTP(S) scheme and let yt-dlp raise on unsupported domains.
+_REMOTE_URL_RE: re.Pattern[str] = re.compile(r"^https?://", re.IGNORECASE)
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -146,13 +154,13 @@ class FrameWindow:
 
 @dataclass
 class VideoMetadata:
-    """Metadata describing a video source (YouTube or local file)."""
+    """Metadata describing a video source (remote URL or local file)."""
 
     source: str                           # Original URL or file path
     title: str                            # Human-readable title
     duration: float = 0.0                 # Total duration in seconds
-    video_id: Optional[str] = None        # YouTube video ID, or None
-    is_youtube: bool = False
+    video_id: Optional[str] = None        # Platform video ID (YouTube, etc.), or None
+    is_youtube: bool = False              # True when source is a YouTube URL specifically
     is_silent: bool = False               # True when no audio stream detected
     width: Optional[int] = None
     height: Optional[int] = None
@@ -169,7 +177,7 @@ class VideoMetadata:
 
 class VideoProcessor:
     """
-    Ingest video sources (YouTube URLs and local files) for RAG pipelines.
+    Ingest video sources (any yt-dlp-supported URL or local file) for RAG pipelines.
 
     Audio path (fully implemented):
         Videos with audio are transcribed with faster-whisper (preferred) or
@@ -220,6 +228,23 @@ class VideoProcessor:
                 return True
         return False
 
+    def is_remote_url(self, url: str) -> bool:
+        """
+        Check whether *url* is a remote HTTP/HTTPS URL that yt-dlp can download.
+
+        Any ``http://`` or ``https://`` string is considered a remote URL and
+        routed through yt-dlp.  yt-dlp supports 1 000+ platforms (YouTube,
+        Twitter/X, TikTok, Instagram, Vimeo, Twitch, Reddit, …); unsupported
+        domains raise a ``RuntimeError`` at download time with a clear message.
+
+        Args:
+            url: Candidate URL string.
+
+        Returns:
+            True if the URL has an HTTP or HTTPS scheme.
+        """
+        return bool(_REMOTE_URL_RE.match(url))
+
     def is_video_file(self, path: str) -> bool:
         """
         Check whether *path* has a recognised video file extension.
@@ -242,31 +267,37 @@ class VideoProcessor:
         Route a video source to the appropriate processing path.
 
         Args:
-            source: YouTube URL or absolute/relative path to a local video.
+            source: Any yt-dlp-supported remote URL (YouTube, Twitter/X,
+                TikTok, Vimeo, etc.) or an absolute/relative path to a local
+                video file.
             force_frame_analysis: When True, skip audio transcription even
-                if audio is present and run the (currently stubbed) silent-
-                video frame-analysis path instead.
+                if audio is present and run the silent-video frame-analysis
+                path instead.
             extra_meta: Extra key/value pairs merged into every chunk's
                 ``meta`` dict.
 
         Returns:
             List of IngestedChunk objects ready for RAG indexing.
         """
-        if self.is_youtube_url(source):
-            return self.process_youtube(source, force_frame_analysis, extra_meta)
+        if self.is_remote_url(source):
+            return self.process_remote_url(source, force_frame_analysis, extra_meta)
         return self.process_local_video(source, force_frame_analysis, extra_meta)
 
-    def process_youtube(
+    def process_remote_url(
         self,
         url: str,
         force_frame_analysis: bool = False,
         extra_meta: Optional[Dict[str, Any]] = None,
     ) -> List["IngestedChunk"]:
         """
-        Download and ingest a YouTube video.
+        Download and ingest a remote video URL via yt-dlp.
+
+        Supports any platform recognised by yt-dlp — YouTube, Twitter/X,
+        TikTok, Instagram, Vimeo, Twitch, Reddit, and 1 000+ others.
+        Unsupported URLs raise a ``RuntimeError`` with the yt-dlp error message.
 
         Args:
-            url: YouTube watch, short, or embed URL.
+            url: Remote video URL (http:// or https://).
             force_frame_analysis: Force the frame-analysis path regardless
                 of whether audio is detected.
             extra_meta: Extra metadata merged into every chunk.
@@ -275,15 +306,15 @@ class VideoProcessor:
             List of IngestedChunk objects.
 
         Raises:
-            RuntimeError: If yt-dlp is not installed.
+            RuntimeError: If yt-dlp is not installed or the download fails.
         """
         if not YTDLP_AVAILABLE:
             raise RuntimeError(
-                "yt-dlp is required for YouTube ingestion. "
+                "yt-dlp is required for remote URL ingestion. "
                 "Install with: pip install yt-dlp"
             )
 
-        video_path, metadata = self._download_youtube(url, force_frame_analysis)
+        video_path, metadata = self._download_remote(url, force_frame_analysis)
         try:
             if not force_frame_analysis and not metadata.is_silent:
                 return self._process_audio_video(video_path, metadata, extra_meta)
@@ -297,6 +328,16 @@ class VideoProcessor:
                     logger.warning(
                         "Could not remove temporary file %s: %s", video_path, exc
                     )
+
+    # Backward-compatible alias
+    def process_youtube(
+        self,
+        url: str,
+        force_frame_analysis: bool = False,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> List["IngestedChunk"]:
+        """Alias for :meth:`process_remote_url` retained for backward compatibility."""
+        return self.process_remote_url(url, force_frame_analysis, extra_meta)
 
     def process_local_video(
         self,
@@ -661,19 +702,20 @@ class VideoProcessor:
     # yt-dlp helpers
     # ------------------------------------------------------------------
 
-    def _download_youtube(
+    def _download_remote(
         self,
         url: str,
         force_frame_analysis: bool = False,
     ) -> Tuple[str, VideoMetadata]:
         """
-        Download a YouTube video using yt-dlp.
+        Download a remote video URL using yt-dlp.
 
-        Downloads audio-only by default (faster); switches to full video
-        when *force_frame_analysis* is True.
+        Works with any yt-dlp-supported platform (YouTube, Twitter/X, TikTok,
+        Instagram, Vimeo, Twitch, Reddit, …).  Downloads audio-only by default
+        (faster); switches to full video when *force_frame_analysis* is True.
 
         Args:
-            url: YouTube URL.
+            url: Remote video URL.
             force_frame_analysis: Download full video stream when True.
 
         Returns:
@@ -746,7 +788,7 @@ class VideoProcessor:
             title=info.get("title", url),
             duration=duration,
             video_id=video_id,
-            is_youtube=True,
+            is_youtube=self.is_youtube_url(url),
             is_silent=is_silent,
             width=info.get("width"),
             height=info.get("height"),
@@ -758,10 +800,19 @@ class VideoProcessor:
         )
 
         logger.info(
-            "YouTube download complete: '%s' (%s, %.0fs, silent=%s)",
-            metadata.title, video_id, duration, is_silent,
+            "Remote download complete: '%s' (%s, %.0fs, silent=%s, youtube=%s)",
+            metadata.title, video_id, duration, is_silent, metadata.is_youtube,
         )
         return downloaded_path, metadata
+
+    # Backward-compatible alias
+    def _download_youtube(
+        self,
+        url: str,
+        force_frame_analysis: bool = False,
+    ) -> Tuple[str, VideoMetadata]:
+        """Alias for :meth:`_download_remote` retained for backward compatibility."""
+        return self._download_remote(url, force_frame_analysis)
 
     def _extract_local_metadata(self, path: str) -> VideoMetadata:
         """
