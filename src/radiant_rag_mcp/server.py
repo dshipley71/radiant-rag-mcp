@@ -459,14 +459,20 @@ async def ingest_video(
     summarize: bool = False,
 ) -> Dict[str, Any]:
     """
-    Ingest one or more videos into the RAG knowledge base.
+    Ingest one or more video files or remote video URLs into the RAG knowledge base.
 
-    Sources may be local file paths (.mp4, .mkv, .webm, .mov, .avi, etc.)
-    or any URL supported by yt-dlp (YouTube, Vimeo, Twitch clips, etc.).
+    Supported local video formats:
+      .mp4, .mkv, .webm, .mov, .avi, .m4v, .flv, .wmv, .ts
+
+    Supported remote URLs (via yt-dlp):
+      YouTube, Twitter/X, TikTok, Instagram, Vimeo, Twitch, Reddit, and 1 000+ others
+
     Processing path is chosen automatically:
-    - Videos with audio:  Whisper transcription → transcript chunks
-    - Silent videos:      VLM frame-window analysis → caption chunks
-    - force_frame_analysis: always use VLM regardless of audio presence
+      - Video with audio:          Whisper transcription → transcript chunks
+      - Silent video:              VLM frame-window analysis → caption chunks
+      - force_frame_analysis=True: always use VLM regardless of audio presence
+
+    For local audio-only files (.mp3, .wav, .m4a, .flac, etc.) use ingest_audio instead.
 
     Args:
         sources:               One or more video file paths or URLs.
@@ -482,9 +488,9 @@ async def ingest_video(
                                and include it in the returned stats.
 
     Returns:
-        Ingestion statistics dict with ``sources_processed``,
-        ``sources_failed``, ``chunks_created``, ``documents_stored``,
-        ``silent_sources``, ``audio_sources``, ``summaries``, and ``errors``.
+        Ingestion statistics dict with ``sources_processed``, ``sources_failed``,
+        ``chunks_created``, ``documents_stored``, ``silent_sources``,
+        ``audio_sources``, ``summaries``, and ``errors``.
     """
     app = ctx.lifespan_context["app"]
     result = await asyncio.to_thread(
@@ -496,6 +502,57 @@ async def ingest_video(
         child_chunk_overlap=child_chunk_overlap,
         enable_frame_captioning=enable_frame_captioning,
         force_frame_analysis=force_frame_analysis,
+        summarize=summarize,
+    )
+    return result
+
+
+# ===========================================================================
+# Tool 12 — ingest_audio
+# ===========================================================================
+@mcp.tool()
+async def ingest_audio(
+    ctx: Context,
+    sources: List[str],
+    hierarchical: bool = True,
+    child_chunk_size: int = 512,
+    child_chunk_overlap: int = 50,
+    summarize: bool = False,
+) -> Dict[str, Any]:
+    """
+    Ingest one or more local audio-only files into the RAG knowledge base
+    via Whisper transcription.
+
+    Supported formats:
+      .mp3, .wav, .m4a, .flac, .ogg, .aac, .opus, .wma, .aiff
+
+    Every source is transcribed with Whisper and stored as transcript chunks.
+    Frame analysis is never applied (audio-only files have no video frames).
+
+    For video files or remote URLs use ingest_video instead.
+
+    Args:
+        sources:             One or more local audio file paths.
+        hierarchical:        ``True`` (default) for hierarchical parent/child
+                             chunk storage; ``False`` for flat storage.
+        child_chunk_size:    Size of child chunks (default 512).
+        child_chunk_overlap: Overlap between child chunks (default 50).
+        summarize:           Generate a VideoSummaryResult (title, chapters,
+                             key topics) for each source and include it in
+                             the returned stats.
+
+    Returns:
+        Ingestion statistics dict with ``sources_processed``, ``sources_failed``,
+        ``chunks_created``, ``documents_stored``, ``audio_sources``,
+        ``summaries``, and ``errors``.
+    """
+    app = ctx.lifespan_context["app"]
+    result = await asyncio.to_thread(
+        app.ingest_audio,
+        sources,
+        use_hierarchical=hierarchical,
+        child_chunk_size=child_chunk_size,
+        child_chunk_overlap=child_chunk_overlap,
         summarize=summarize,
     )
     return result

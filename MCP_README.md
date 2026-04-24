@@ -171,6 +171,7 @@ All `config.yaml` keys can be overridden via `RADIANT_<SECTION>_<KEY>`
 | `ingest_documents` | Index local file paths or directories |
 | `ingest_url` | Index a URL or GitHub repository |
 | `ingest_video` | Index video files or remote video URLs (YouTube, Twitter/X, etc.) |
+| `ingest_audio` | Index local audio-only files (.mp3, .wav, .m4a, .flac, etc.) via Whisper |
 | `get_index_stats` | Document counts and system health |
 | `clear_index` | Clear all indexed documents (requires `confirm=True`) |
 | `rebuild_bm25` | Rebuild BM25 index from vector store contents |
@@ -421,7 +422,12 @@ Ingests local video files or any remote video URL supported by yt-dlp.
 Processing path is chosen automatically: Whisper transcription for videos
 with audio, VLM frame-window analysis for silent videos.
 
-**Claude Code prompt (local file):**
+For local audio-only files use `ingest_audio` instead.
+
+**Supported local video formats:** `.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`,
+`.m4v`, `.flv`, `.wmv`, `.ts`
+
+**Claude Code prompt (local video file):**
 ```
 Index the video file /tmp/demo.mp4 into my knowledge base and generate a summary.
 ```
@@ -436,7 +442,7 @@ Ingest the YouTube video https://www.youtube.com/watch?v=aircAruvnKk and summari
 Ingest the video at https://twitter.com/i/status/2047129605996192012 into my knowledge base.
 ```
 
-**MCP Inspector call (audio video with summary):**
+**MCP Inspector call (video with summary):**
 ```json
 {
   "tool": "ingest_video",
@@ -464,7 +470,7 @@ Ingest the video at https://twitter.com/i/status/2047129605996192012 into my kno
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `sources` | `list[str]` | *(required)* | File paths or URLs |
+| `sources` | `list[str]` | *(required)* | Video file paths or URLs |
 | `hierarchical` | `bool` | `true` | Parent/child chunk storage |
 | `child_chunk_size` | `int` | `512` | Tokens per child chunk |
 | `child_chunk_overlap` | `int` | `50` | Overlap between chunks |
@@ -497,7 +503,61 @@ Ingest the video at https://twitter.com/i/status/2047129605996192012 into my kno
 
 ---
 
-## LLM model
+### `ingest_audio`
+
+Ingests local audio-only files into the knowledge base via Whisper
+transcription.  Frame analysis is never applied.  Passing a non-audio path
+returns an error before any processing begins.
+
+**Supported formats:** `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.aac`,
+`.opus`, `.wma`, `.aiff`
+
+**Claude Code prompt:**
+```
+Index the audio file /tmp/podcast.mp3 into my knowledge base.
+```
+
+**Claude Code prompt (with summary):**
+```
+Ingest /tmp/lecture.wav into my knowledge base and generate a chapter summary.
+```
+
+**MCP Inspector call:**
+```json
+{
+  "tool": "ingest_audio",
+  "arguments": {
+    "sources": ["/tmp/podcast.mp3", "/tmp/lecture.wav"],
+    "hierarchical": true,
+    "summarize": false
+  }
+}
+```
+
+**Arguments:**
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `sources` | `list[str]` | *(required)* | Local audio file paths |
+| `hierarchical` | `bool` | `true` | Parent/child chunk storage |
+| `child_chunk_size` | `int` | `512` | Tokens per child chunk |
+| `child_chunk_overlap` | `int` | `50` | Overlap between chunks |
+| `summarize` | `bool` | `false` | Generate `VideoSummaryResult` per source |
+
+**Example response:**
+```json
+{
+  "sources_processed": 1,
+  "sources_failed": 0,
+  "chunks_created": 8,
+  "documents_stored": 16,
+  "audio_sources": 1,
+  "summaries": {},
+  "errors": []
+}
+```
+
+
 
 The default model is `gemma4:31b-cloud` via `https://ollama.com/v1` (configured
 in `config.yaml` under `llm_backend`). Override at runtime:

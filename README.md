@@ -57,7 +57,8 @@ MCP server. It combines:
 | **Agents** | 20+ specialized pipeline agents |
 | **Ingestion** | Files, directories, URLs, GitHub repositories, video files and remote URLs |
 | **Video** | Local files + any yt-dlp URL (YouTube, Twitter/X, Vimeo, TikTok, …); Whisper transcription or VLM frame analysis |
-| **MCP Tools** | 11 tools via stdio or HTTP transport |
+| **Audio** | Local audio-only files (.mp3, .wav, .m4a, .flac, .ogg, .aac, .opus, .wma, .aiff); Whisper transcription |
+| **MCP Tools** | 12 tools via stdio or HTTP transport |
 | **Monitoring** | Prometheus metrics, OpenTelemetry tracing |
 
 ---
@@ -355,24 +356,29 @@ Setting `pipeline.use_critic: false` is sufficient — you do not also need
 | Code | .py, .js, .ts, .go, .rs, .java, .cpp, and more |
 | JSON/JSONL | .json, .jsonl |
 | Images | .png, .jpg (requires VLM, disabled by default) |
-| **Video** | .mp4, .mkv, .webm, .mov, .avi, .m4v + any yt-dlp URL |
+| **Video** | .mp4, .mkv, .webm, .mov, .avi, .m4v, .flv, .wmv, .ts + any yt-dlp URL |
+| **Audio** | .mp3, .wav, .m4a, .flac, .ogg, .aac, .opus, .wma, .aiff |
 
-### Video ingestion
+### Video and audio ingestion
 
-Videos are routed to one of two processing paths automatically:
+Videos and audio files are routed to one of two processing paths automatically:
 
 ```
 process_video(source)
     │
-    ├── has audio? ──YES──► Whisper transcription ──► transcript chunks
-    │                                                  content_type="transcript"
+    ├── audio-only file (.mp3/.wav/.m4a/…)
+    │       └──────────────────────────────► Whisper transcription ──► transcript chunks
     │
-    └── no audio  ────────► VLM frame-window analysis ► caption chunks
-                             (also: force_frame_analysis=True)
-                             content_type="frame_window_captions"
+    ├── video with audio  ─────────────────► Whisper transcription ──► transcript chunks
+    │                                        content_type="transcript"
+    │
+    └── silent video (no audio stream)
+            force_frame_analysis=True ──────► VLM frame-window analysis ► caption chunks
+                                              content_type="frame_window_captions"
 ```
 
-**Supported sources** — any local video file path *or* any URL supported by
+**Supported sources** — any local video file path, local audio-only file
+(.mp3, .wav, .m4a, .flac, .ogg, .aac, .opus, .wma, .aiff), *or* any URL supported by
 [yt-dlp](https://github.com/yt-dlp/yt-dlp): YouTube, Twitter/X, TikTok,
 Instagram, Vimeo, Twitch, Reddit, and 1 000+ other platforms.
 
@@ -542,12 +548,22 @@ app = create_app("config.yaml")
 app.ingest_documents(["./docs/"], use_hierarchical=True)
 app.ingest_urls(["https://github.com/owner/repo"])
 
-# Ingest video — local files or any yt-dlp URL
+# Ingest video files or remote URLs
 stats = app.ingest_videos(
-    sources=["./clips/demo.mp4", "https://www.youtube.com/watch?v=aircAruvnKk"],
+    sources=[
+        "./clips/demo.mp4",                              # local video
+        "https://www.youtube.com/watch?v=aircAruvnKk",  # YouTube
+    ],
     use_hierarchical=True,
-    force_frame_analysis=False,   # True to force VLM even when audio exists
-    summarize=True,               # True to generate VideoSummaryResult per source
+    force_frame_analysis=False,
+    summarize=True,
+)
+
+# Ingest audio-only files (separate method)
+stats = app.ingest_audio(
+    sources=["./recordings/podcast.mp3", "./recordings/lecture.wav"],
+    use_hierarchical=True,
+    summarize=True,
 )
 print(stats["sources_processed"])   # int
 print(stats["chunks_created"])      # int

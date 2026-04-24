@@ -32,6 +32,8 @@ The following items from the original audit have been resolved:
 | `VideoProcessorConfig` missing `window_caption_sentences` | ✅ Field added to `config.py` dataclass and wired into the factory constructor; reads from `RADIANT_VIDEO_SUMMARIZATION_WINDOW_CAPTION_SENTENCES` |
 | Remote video URL support (any yt-dlp source) | ✅ `is_remote_url()` / `process_remote_url()` / `_download_remote()` added; `VideoMetadata.is_youtube` set dynamically; `process_youtube()` / `_download_youtube()` kept as backward-compat aliases |
 | `_REMOTE_URL_RE` pattern | ✅ Module-level `^https?://` compiled pattern routes any HTTP/S URL through yt-dlp; unsupported domains surface a clear `RuntimeError` |
+| Audio-only local file support | ✅ `AUDIO_EXTENSIONS` constant added; `is_audio_file()` and `process_local_audio()` methods added; `_extract_audio_metadata()` uses ffprobe without OpenCV; `process_video()` dispatch updated to route audio files before local-video path |
+| `ingest_audio` MCP tool (tool 12) | ✅ Separate `app.ingest_audio()` method validates audio extensions before processing; `ingest_audio` MCP tool added to `server.py`; `ingest_video` restricted to video files and remote URLs only |
 
 ---
 

@@ -335,7 +335,18 @@ class RadiantRAG:
         force_frame_analysis: bool = False,
         summarize: bool = False,
     ) -> Dict[str, Any]:
-        """Ingest videos into the RAG system."""
+        """
+        Ingest video files or remote URLs into the RAG system.
+
+        Sources may be:
+          - Local video files (.mp4, .mkv, .webm, .mov, .avi, .m4v, .flv, .wmv, .ts)
+          - Any remote URL supported by yt-dlp (YouTube, Twitter/X, Vimeo, etc.)
+
+        Processing path is selected automatically:
+          - Video with audio          → Whisper transcription → transcript chunks
+          - Silent video              → VLM frame-window analysis → caption chunks
+          - force_frame_analysis=True → always use VLM regardless of audio presence
+        """
         from radiant_rag_mcp.ingestion.video_processor import VideoProcessor
         from dataclasses import replace
 
@@ -387,6 +398,90 @@ class RadiantRAG:
                     stats["summaries"][source] = result.__dict__
             except Exception as e:
                 logger.error(f"Failed to ingest video {source}: {e}")
+                stats["sources_failed"] += 1
+                stats["errors"].append(f"{source}: {e}")
+
+        self._bm25_index.sync_with_store()
+        self._bm25_index.save()
+        return stats
+
+    def ingest_audio(
+        self,
+        sources: List[str],
+        use_hierarchical: bool = True,
+        child_chunk_size: int = 512,
+        child_chunk_overlap: int = 50,
+        summarize: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Ingest local audio-only files into the RAG system via Whisper transcription.
+
+        Sources must be local file paths with an audio extension:
+          .mp3, .wav, .m4a, .flac, .ogg, .aac, .opus, .wma, .aiff
+
+        Every source is routed through Whisper transcription regardless of
+        content.  Frame analysis is never applied (audio files have no frames).
+        """
+        from radiant_rag_mcp.ingestion.video_processor import (
+            VideoProcessor, AUDIO_EXTENSIONS,
+        )
+
+        # Validate — reject non-audio paths early with a clear message
+        invalid = [
+            s for s in sources
+            if not any(s.lower().endswith(ext) for ext in AUDIO_EXTENSIONS)
+        ]
+        if invalid:
+            return {
+                "sources_processed": 0,
+                "sources_failed": len(invalid),
+                "chunks_created": 0,
+                "documents_stored": 0,
+                "audio_sources": 0,
+                "summaries": {},
+                "errors": [
+                    f"{s}: not a recognised audio format. "
+                    f"Supported: {', '.join(sorted(AUDIO_EXTENSIONS))}"
+                    for s in invalid
+                ],
+            }
+
+        processor = VideoProcessor(config=self._config.video, image_captioner=None)
+        stats: Dict[str, Any] = {
+            "sources_processed": 0,
+            "sources_failed": 0,
+            "chunks_created": 0,
+            "documents_stored": 0,
+            "audio_sources": 0,
+            "summaries": {},
+            "errors": [],
+        }
+
+        for source in sources:
+            try:
+                chunks = processor.process_local_audio(source)
+                if not chunks:
+                    stats["sources_failed"] += 1
+                    stats["errors"].append(f"No chunks from: {source}")
+                    continue
+                stats["sources_processed"] += 1
+                stats["audio_sources"] += 1
+                stats["chunks_created"] += len(chunks)
+                stored = (
+                    self._ingest_hierarchical(source, chunks, child_chunk_size, child_chunk_overlap)
+                    if use_hierarchical else self._ingest_flat(chunks)
+                )
+                stats["documents_stored"] += stored
+                if summarize:
+                    from radiant_rag_mcp.agents.video_summarization import VideoSummarizationAgent
+                    agent = VideoSummarizationAgent(
+                        llm=self._llm_clients.chat,
+                        config=self._config.video_summarization,
+                    )
+                    result = agent.summarize_video(source, chunks)
+                    stats["summaries"][source] = result.__dict__
+            except Exception as e:
+                logger.error(f"Failed to ingest audio {source}: {e}")
                 stats["sources_failed"] += 1
                 stats["errors"].append(f"{source}: {e}")
 

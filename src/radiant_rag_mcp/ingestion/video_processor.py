@@ -3,7 +3,8 @@ Video processing for Radiant Agentic RAG.
 
 Handles any remote video URL supported by yt-dlp (YouTube, Twitter/X,
 TikTok, Instagram, Vimeo, Twitch, Reddit, and 1 000+ other sites) as well
-as local video files.  Provides:
+as local video files and local audio-only files (.mp3, .wav, .m4a, .flac,
+.ogg, .aac, .opus, .wma, .aiff).  Provides:
   - Audio transcription via faster-whisper (preferred) or openai-whisper
   - yt-dlp download helper for any supported remote URL
   - Time-windowed IngestedChunk output compatible with the RAG pipeline
@@ -17,6 +18,8 @@ Usage::
     vp = VideoProcessor(VideoProcessorConfig())
     chunks = vp.process_video("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
     chunks = vp.process_video("https://twitter.com/i/status/2047129605996192012")
+    chunks = vp.process_video("/tmp/lecture.mp3")   # audio-only local file
+    chunks = vp.process_video("/tmp/podcast.wav")
 
 LLM access (when needed by future paths): use ``self._llm_clients.chat``
 not ``self._llm_client``.
@@ -110,6 +113,11 @@ VIDEO_EXTENSIONS = {
     ".m4v", ".flv", ".wmv", ".ts",
 }
 
+AUDIO_EXTENSIONS = {
+    ".mp3", ".wav", ".m4a", ".flac", ".ogg",
+    ".aac", ".opus", ".wma", ".aiff", ".aif",
+}
+
 # Compiled patterns that identify YouTube URLs
 _YOUTUBE_RE: List[re.Pattern[str]] = [
     re.compile(r"(?:https?://)?(?:www\.)?youtube\.com/watch\?.*v=[\w-]+"),
@@ -154,7 +162,7 @@ class FrameWindow:
 
 @dataclass
 class VideoMetadata:
-    """Metadata describing a video source (remote URL or local file)."""
+    """Metadata describing a video source (remote URL, local video, or local audio file)."""
 
     source: str                           # Original URL or file path
     title: str                            # Human-readable title
@@ -177,7 +185,8 @@ class VideoMetadata:
 
 class VideoProcessor:
     """
-    Ingest video sources (any yt-dlp-supported URL or local file) for RAG pipelines.
+    Ingest video sources (any yt-dlp-supported URL, local video file, or
+    local audio-only file) for RAG pipelines.
 
     Audio path (fully implemented):
         Videos with audio are transcribed with faster-whisper (preferred) or
@@ -245,6 +254,18 @@ class VideoProcessor:
         """
         return bool(_REMOTE_URL_RE.match(url))
 
+    def is_audio_file(self, path: str) -> bool:
+        """
+        Check whether *path* has a recognised audio-only file extension.
+
+        Args:
+            path: File path string.
+
+        Returns:
+            True if the file suffix is listed in AUDIO_EXTENSIONS.
+        """
+        return Path(path).suffix.lower() in AUDIO_EXTENSIONS
+
     def is_video_file(self, path: str) -> bool:
         """
         Check whether *path* has a recognised video file extension.
@@ -268,11 +289,12 @@ class VideoProcessor:
 
         Args:
             source: Any yt-dlp-supported remote URL (YouTube, Twitter/X,
-                TikTok, Vimeo, etc.) or an absolute/relative path to a local
-                video file.
+                TikTok, Vimeo, etc.), an absolute/relative path to a local
+                video file, or a local audio-only file (.mp3, .wav, .m4a,
+                .flac, .ogg, .aac, .opus, .wma, .aiff).
             force_frame_analysis: When True, skip audio transcription even
                 if audio is present and run the silent-video frame-analysis
-                path instead.
+                path instead.  Ignored for audio-only files.
             extra_meta: Extra key/value pairs merged into every chunk's
                 ``meta`` dict.
 
@@ -281,6 +303,8 @@ class VideoProcessor:
         """
         if self.is_remote_url(source):
             return self.process_remote_url(source, force_frame_analysis, extra_meta)
+        if self.is_audio_file(source):
+            return self.process_local_audio(source, extra_meta)
         return self.process_local_video(source, force_frame_analysis, extra_meta)
 
     def process_remote_url(
@@ -338,6 +362,74 @@ class VideoProcessor:
     ) -> List["IngestedChunk"]:
         """Alias for :meth:`process_remote_url` retained for backward compatibility."""
         return self.process_remote_url(url, force_frame_analysis, extra_meta)
+
+    def process_local_audio(
+        self,
+        path: str,
+        extra_meta: Optional[Dict[str, Any]] = None,
+    ) -> List["IngestedChunk"]:
+        """
+        Ingest a local audio-only file (.mp3, .wav, .m4a, .flac, .ogg, etc.).
+
+        Bypasses the OpenCV / frame-analysis machinery entirely and feeds the
+        file straight to Whisper for transcription.  ``force_frame_analysis``
+        is intentionally not accepted here — audio-only files have no frames
+        to analyse.
+
+        Args:
+            path: Absolute or relative path to an audio file whose suffix is
+                  in ``AUDIO_EXTENSIONS``.
+            extra_meta: Extra key/value pairs merged into every chunk.
+
+        Returns:
+            List of IngestedChunk objects.
+        """
+        metadata = self._extract_audio_metadata(path)
+        return self._process_audio_video(path, metadata, extra_meta)
+
+    def _extract_audio_metadata(self, path: str) -> VideoMetadata:
+        """
+        Build VideoMetadata for a local audio-only file.
+
+        Uses ffprobe to read the audio-stream duration; falls back to 0.0 if
+        ffprobe is unavailable.  Does not invoke OpenCV (which cannot open
+        audio files).
+
+        Args:
+            path: Path to the audio file.
+
+        Returns:
+            VideoMetadata with ``is_silent=False``, ``width/height/fps=None``.
+        """
+        p = Path(path)
+        title = p.stem
+        ext = p.suffix.lstrip(".")
+        duration = 0.0
+
+        streams = self._probe_streams(path)
+        for stream in streams:
+            raw_dur = stream.get("duration")
+            if raw_dur:
+                try:
+                    duration = max(duration, float(raw_dur))
+                except (ValueError, TypeError):
+                    pass
+
+        logger.info(
+            "Audio file metadata: '%s' (%.0fs)", title, duration
+        )
+        return VideoMetadata(
+            source=path,
+            title=title,
+            duration=duration,
+            video_id=None,
+            is_youtube=False,
+            is_silent=False,   # audio-only files always have audio by definition
+            width=None,
+            height=None,
+            fps=None,
+            ext=ext,
+        )
 
     def process_local_video(
         self,

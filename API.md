@@ -47,6 +47,7 @@ methods:
 | `ingest_documents` | `app.ingest_documents()` |
 | `ingest_url` | `app.ingest_urls()` |
 | `ingest_video` | `app.ingest_videos()` |
+| `ingest_audio` | `app.ingest_audio()` |
 | `get_index_stats` | `app.get_stats()` + `app.check_health()` |
 | `clear_index` | `app.clear_index()` |
 | `rebuild_bm25` | `app.rebuild_bm25_index()` |
@@ -180,7 +181,7 @@ Instagram, Vimeo, Twitch, Reddit, and 1 000+ other platforms.
 ```python
 stats = app.ingest_videos(
     sources=[
-        "./recordings/demo.mp4",                          # local file
+        "./recordings/demo.mp4",                          # local video
         "https://www.youtube.com/watch?v=aircAruvnKk",   # YouTube
         "https://twitter.com/i/status/2047129605996192012", # Twitter/X
     ],
@@ -206,14 +207,14 @@ print(stats["summaries"])           # dict[source, VideoSummaryResult.__dict__]
 **Processing path selection:**
 
 ```
-process_video(source)
+ingest_videos(source)                     ingest_audio(source)
+    │                                         │
+    ├── video with audio ──► Whisper          └── always ──► Whisper transcription
+    │   content_type="transcript"                            content_type="transcript"
     │
-    ├── has audio? ──YES──► Whisper transcription ──► transcript chunks
-    │                                                  meta.content_type = "transcript"
-    │
-    └── no audio  ────────► VLM frame-window analysis ► caption chunks
-                             (also: force_frame_analysis=True)
-                             meta.content_type = "frame_window_captions"
+    └── silent video ──► VLM frame-window analysis
+        content_type="frame_window_captions"
+        (also: force_frame_analysis=True)
 ```
 
 **Chunk metadata fields** (from video ingestion):
@@ -232,6 +233,34 @@ process_video(source)
 | `frame_timestamps` | List of sampled frame times (frame-window path only) |
 | `window_index` | Window sequence number (frame-window path only) |
 | `doc_level` | `"child"` (hierarchical) or `"flat"` |
+
+### Audio-only files — `ingest_audio()`
+
+Ingests local audio-only files via Whisper transcription.  Frame analysis is
+never applied.  Passing a non-audio path raises a clear error before any
+processing begins.
+
+```python
+stats = app.ingest_audio(
+    sources=[
+        "./recordings/podcast.mp3",
+        "./recordings/lecture.wav",
+        "./interviews/q4_review.m4a",
+    ],
+    use_hierarchical=True,       # parent/child chunk storage (default True)
+    child_chunk_size=512,
+    child_chunk_overlap=50,
+    summarize=False,             # True to generate VideoSummaryResult per source
+)
+
+print(stats["sources_processed"])   # int
+print(stats["audio_sources"])       # always equals sources_processed
+print(stats["chunks_created"])      # int
+print(stats["errors"])              # list[str] — includes unsupported-format errors
+```
+
+**Supported formats:** `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.aac`,
+`.opus`, `.wma`, `.aiff`
 
 ### Video summarization — `VideoSummarizationAgent`
 
@@ -615,7 +644,7 @@ radiant-rag query "What is RAG?" --mode hybrid
 | File | Role |
 |---|---|
 | `app.py` | `RadiantRAG` class — all ingestion, query, and management logic |
-| `server.py` | FastMCP server — 11 MCP tools, each a thin wrapper around `app.py` |
+| `server.py` | FastMCP server — 12 MCP tools, each a thin wrapper around `app.py` |
 | `orchestrator.py` | Agent pipeline execution — called by `app.query_raw()` |
 | `config.py` | Configuration dataclasses and `load_config()` |
 | `ingestion/processor.py` | Document parsing, chunking, and cleaning |
