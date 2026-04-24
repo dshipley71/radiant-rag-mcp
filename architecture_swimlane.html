@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radiant RAG MCP — Architecture Swimlane</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --bg:   #ffffff;
+    --bg2:  #f8f7f4;
+    --tx:   #1a1a18;
+    --tx2:  #6b6b66;
+    --tx3:  #9c9a92;
+    --bd:   rgba(0,0,0,0.12);
+    --bd2:  rgba(0,0,0,0.20);
+    --pu-bg:#EEEDFE; --pu-bd:#534AB7; --pu-tx:#3C3489;
+    --te-bg:#E1F5EE; --te-bd:#0F6E56; --te-tx:#085041;
+    --bl-bg:#E6F1FB; --bl-bd:#185FA5; --bl-tx:#0C447C;
+    --co-bg:#FAECE7; --co-bd:#993C1D; --co-tx:#712B13;
+    --gr-bg:#F1EFE8; --gr-bd:#5F5E5A; --gr-tx:#444441;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:   #1c1c1a;
+      --bg2:  #252523;
+      --tx:   #e8e6de;
+      --tx2:  #9c9a92;
+      --tx3:  #6b6b66;
+      --bd:   rgba(255,255,255,0.12);
+      --bd2:  rgba(255,255,255,0.22);
+      --pu-bg:#3C3489; --pu-bd:#AFA9EC; --pu-tx:#CECBF6;
+      --te-bg:#085041; --te-bd:#5DCAA5; --te-tx:#9FE1CB;
+      --bl-bg:#0C447C; --bl-bd:#85B7EB; --bl-tx:#B5D4F4;
+      --co-bg:#712B13; --co-bd:#F0997B; --co-tx:#F5C4B3;
+      --gr-bg:#444441; --gr-bd:#B4B2A9; --gr-tx:#D3D1C7;
+    }
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--tx);
+    padding: 40px 32px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--tx);
+    margin-bottom: 4px;
+  }
+
+  .subtitle {
+    font-size: 13px;
+    color: var(--tx2);
+    margin-bottom: 24px;
+  }
+
+  .swimlane {
+    border: 0.5px solid var(--bd2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .row {
+    display: flex;
+    border-bottom: 0.5px solid var(--bd);
+  }
+
+  .row:last-child { border-bottom: none; }
+
+  .lbl {
+    width: 100px;
+    min-width: 100px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    padding: 12px 11px 12px 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--tx2);
+    text-align: right;
+    border-right: 0.5px solid var(--bd);
+    line-height: 1.4;
+  }
+
+  .cnt {
+    flex: 1;
+    padding: 11px 14px;
+    min-width: 0;
+  }
+
+  .grp {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 6px;
+  }
+
+  .grp:last-child { margin-bottom: 0; }
+
+  .grp-lbl {
+    font-size: 10px;
+    color: var(--tx3);
+    min-width: 56px;
+    flex-shrink: 0;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 9px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-family: var(--font);
+    white-space: nowrap;
+    border: 0.5px solid;
+    line-height: 1.4;
+  }
+
+  .pu { background: var(--pu-bg); border-color: var(--pu-bd); color: var(--pu-tx); }
+  .te { background: var(--te-bg); border-color: var(--te-bd); color: var(--te-tx); }
+  .bl { background: var(--bl-bg); border-color: var(--bl-bd); color: var(--bl-tx); }
+  .co { background: var(--co-bg); border-color: var(--co-bd); color: var(--co-tx); }
+  .gr { background: var(--gr-bg); border-color: var(--gr-bd); color: var(--gr-tx); }
+
+  .connector {
+    display: flex;
+    align-items: center;
+    padding: 3px 0 3px 100px;
+    gap: 20px;
+  }
+
+  .conn-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+  }
+
+  .conn-line {
+    width: 0.5px;
+    height: 10px;
+    background: var(--bd2);
+  }
+
+  .conn-lbl {
+    font-size: 10px;
+    color: var(--tx3);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 14px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--tx2);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    border: 0.5px solid;
+  }
+
+  .flow-label {
+    font-size: 10px;
+    color: var(--tx3);
+    padding-left: 100px;
+    margin-bottom: 6px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Radiant RAG MCP — Architecture Swimlane</h1>
+<p class="subtitle">Request flow from client to infrastructure across all pipeline layers</p>
+
+<p class="flow-label">↓ request flow</p>
+
+<div class="swimlane">
+
+  <!-- Clients -->
+  <div class="row">
+    <div class="lbl">Clients</div>
+    <div class="cnt" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+      <span class="chip pu">Claude Code</span>
+      <span class="chip pu">Claude Desktop</span>
+      <span class="chip pu">Colab / REST</span>
+      <span class="chip pu">Any MCP client</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="connector">
+  <div class="conn-item"><div class="conn-line"></div><div class="conn-lbl">stdio</div><div class="conn-line"></div></div>
+  <div class="conn-item"><div class="conn-line"></div><div class="conn-lbl">HTTP / SSE</div><div class="conn-line"></div></div>
+</div>
+
+<div class="swimlane">
+
+  <!-- MCP Tools -->
+  <div class="row">
+    <div class="lbl">FastMCP server<br>12 tools</div>
+    <div class="cnt">
+      <div class="grp">
+        <span class="grp-lbl">ingestion</span>
+        <span class="chip te">ingest_documents</span>
+        <span class="chip te">ingest_url</span>
+        <span class="chip te">ingest_video</span>
+        <span class="chip te">ingest_audio</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">query</span>
+        <span class="chip te">search_knowledge</span>
+        <span class="chip te">query_knowledge</span>
+        <span class="chip te">simple_query</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">manage</span>
+        <span class="chip te">start_conversation</span>
+        <span class="chip te">get_index_stats</span>
+        <span class="chip te">clear_index</span>
+        <span class="chip te">rebuild_bm25</span>
+        <span class="chip te">set_ingest_mode</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector arrow -->
+  <div style="display:flex;padding:3px 0 3px 100px;">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px;">
+      <div style="width:0.5px;height:10px;background:var(--bd2);"></div>
+      <div style="width:0.5px;height:10px;background:var(--bd2);"></div>
+    </div>
+  </div>
+
+  <!-- Application -->
+  <div class="row">
+    <div class="lbl">Application<br>app.py</div>
+    <div class="cnt">
+      <div class="grp">
+        <span class="grp-lbl">ingest</span>
+        <span class="chip bl">Doc / URL processor</span>
+        <span class="chip bl">Video processor</span>
+        <span class="chip bl">Audio processor</span>
+        <span class="chip bl">Web / GitHub crawler</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">query</span>
+        <span class="chip bl">Agentic orchestrator</span>
+        <span class="chip bl">Conversation sessions</span>
+        <span class="chip bl">BM25 index sync</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector arrow -->
+  <div style="display:flex;padding:3px 0 3px 100px;">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px;">
+      <div style="width:0.5px;height:10px;background:var(--bd2);"></div>
+      <div style="width:0.5px;height:10px;background:var(--bd2);"></div>
+    </div>
+  </div>
+
+  <!-- Agents -->
+  <div class="row">
+    <div class="lbl">Agent pipeline<br>20+ agents</div>
+    <div class="cnt">
+      <div class="grp">
+        <span class="grp-lbl">query prep</span>
+        <span class="chip co">Query rewrite</span>
+        <span class="chip co">Query expansion</span>
+        <span class="chip co">Planning</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">retrieval</span>
+        <span class="chip co">Dense (HNSW)</span>
+        <span class="chip co">BM25</span>
+        <span class="chip co">RRF fusion</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">post-retrieval</span>
+        <span class="chip co">Hierarchical auto-merge</span>
+        <span class="chip co">Cross-encoder rerank</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">generation</span>
+        <span class="chip co">Answer synthesis</span>
+        <span class="chip co">Critic</span>
+        <span class="chip co">Citation tracking</span>
+        <span class="chip co">Video summarization</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector arrow -->
+  <div style="display:flex;padding:3px 0 3px 100px;">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1px;">
+      <div style="width:0.5px;height:10px;background:var(--bd2);"></div>
+      <div style="width:0.5px;height:10px;background:var(--bd2);"></div>
+    </div>
+  </div>
+
+  <!-- Infrastructure -->
+  <div class="row">
+    <div class="lbl">Infrastructure</div>
+    <div class="cnt">
+      <div class="grp">
+        <span class="grp-lbl">LLM</span>
+        <span class="chip gr">Ollama Cloud</span>
+        <span class="chip gr">OpenAI</span>
+        <span class="chip gr">vLLM</span>
+        <span class="chip gr">HuggingFace local</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">storage</span>
+        <span class="chip gr">ChromaDB</span>
+        <span class="chip gr">Redis Stack</span>
+      </div>
+      <div class="grp">
+        <span class="grp-lbl">local models</span>
+        <span class="chip gr">sentence-transformers</span>
+        <span class="chip gr">cross-encoder</span>
+        <span class="chip gr">Whisper</span>
+        <span class="chip gr">Qwen2-VL / Ollama VLM</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:var(--pu-bg);border-color:var(--pu-bd);"></span>Clients</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--te-bg);border-color:var(--te-bd);"></span>MCP tools</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--bl-bg);border-color:var(--bl-bd);"></span>Application</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--co-bg);border-color:var(--co-bd);"></span>Agents</div>
+  <div class="legend-item"><span class="legend-dot" style="background:var(--gr-bg);border-color:var(--gr-bd);"></span>Infrastructure</div>
+</div>
+
+</body>
+</html>
