@@ -1,19 +1,32 @@
-# AGENTS.md - Radiant RAG Agents
+# AGENTS.md — Radiant RAG MCP Agents
 
-Detailed guide for developing and modifying pipeline agents.
+Developer guide for creating and modifying pipeline agents in `radiant-rag-mcp`.
+
+Package: `radiant_rag_mcp`  
+Source layout: `src/radiant_rag_mcp/`
+
+---
 
 ## Agent Hierarchy
 
 ```
 BaseAgent (Abstract)
 ├── LLMAgent (requires LLM client)
-│   ├── PlanningAgent
-│   ├── AnswerSynthesisAgent
-│   ├── CriticAgent
-│   ├── QueryDecompositionAgent
+│   ├── PlanningAgent               (disabled by default)
+│   ├── QueryDecompositionAgent     (disabled by default)
 │   ├── QueryRewriteAgent
 │   ├── QueryExpansionAgent
-│   └── WebSearchAgent
+│   ├── AnswerSynthesisAgent
+│   ├── CriticAgent
+│   ├── ContextEvaluationAgent
+│   ├── SummarizationAgent
+│   ├── FactVerificationAgent       (disabled by default)
+│   ├── CitationTrackingAgent
+│   ├── LanguageDetectionAgent      (disabled by default)
+│   ├── TranslationAgent            (disabled by default)
+│   ├── IntelligentChunkingAgent
+│   ├── VideoSummarizationAgent
+│   └── WebSearchAgent              (disabled by default)
 │
 ├── RetrievalAgent (requires vector store)
 │   └── DenseRetrievalAgent
@@ -23,78 +36,91 @@ BaseAgent (Abstract)
     ├── RRFAgent
     ├── HierarchicalAutoMergingAgent
     ├── CrossEncoderRerankingAgent
-    └── MultiHopReasoningAgent
+    └── MultiHopReasoningAgent      (disabled by default)
 ```
+
+---
 
 ## Creating a New Agent
 
-### Step 1: Choose Base Class
+### Step 1: Choose base class
+
 ```python
-from radiant.agents.base_agent import BaseAgent, LLMAgent, RetrievalAgent, AgentCategory
+from radiant_rag_mcp.agents.base_agent import BaseAgent, LLMAgent, RetrievalAgent, AgentCategory
 ```
 
-### Step 2: Implement Required Properties
+- **`BaseAgent`** — no LLM or vector store required (e.g. BM25, RRF, reranking)
+- **`LLMAgent`** — requires an `LLMClient` for text generation
+- **`RetrievalAgent`** — requires a `BaseVectorStore` for document retrieval
+
+### Step 2: Implement required properties
+
 ```python
 class MyAgent(BaseAgent):
     @property
     def name(self) -> str:
         return "MyAgent"
-    
+
     @property
     def category(self) -> AgentCategory:
-        return AgentCategory.UTILITY  # or PLANNING, QUERY_PROCESSING, RETRIEVAL, etc.
-    
+        return AgentCategory.UTILITY  # see AgentCategory enum below
+
     @property
     def description(self) -> str:
         return "What this agent does"
 ```
 
-### Step 3: Implement _execute()
+### Step 3: Implement `_execute()`
+
 ```python
 def _execute(
     self,
-    query: str,           # Use descriptive parameter names
-    context: List[Any],   # These names are used by orchestrator
+    query: str,
+    context: List[Any],
     **kwargs: Any,
 ) -> YourReturnType:
     """
     Core execution logic.
-    
+
     Args:
         query: The input query
         context: Retrieved documents
-        
+
     Returns:
         Your result type
     """
-    # Implementation here
+    # implementation here
     return result
 ```
 
-### Step 4: Optional Lifecycle Hooks
+### Step 4: Optional lifecycle hooks
+
 ```python
 def _before_execute(self, **kwargs) -> None:
-    """Called before _execute(). Use for validation/setup."""
+    """Called before _execute(). Use for validation or setup."""
     pass
 
 def _after_execute(self, result: Any, metrics: AgentMetrics, **kwargs) -> Any:
-    """Called after success. Can modify result."""
+    """Called after success. Can modify result or add metrics."""
     metrics.custom["my_metric"] = some_value
     return result
 
 def _on_error(self, error: Exception, metrics: AgentMetrics, **kwargs) -> Optional[Any]:
-    """Called on error. Return fallback or None to propagate."""
+    """Called on error. Return a fallback value or None to re-raise."""
     if isinstance(error, RecoverableError):
         return self._default_result()
-    return None  # Re-raises the error
+    return None  # re-raises the original error
 ```
+
+---
 
 ## Agent Parameter Reference
 
-CRITICAL: Orchestrator calls use keyword arguments. Names must match exactly.
+**Critical:** The orchestrator calls agents using keyword arguments.
+Parameter names in `_execute()` must match exactly.
 
-| Agent | _execute() Parameters |
-|-------|----------------------|
+| Agent | `_execute()` Parameters |
+|---|---|
 | `PlanningAgent` | `query: str, context: Optional[str] = None` |
 | `QueryDecompositionAgent` | `query: str` |
 | `QueryRewriteAgent` | `query: str` |
@@ -108,90 +134,75 @@ CRITICAL: Orchestrator calls use keyword arguments. Names must match exactly.
 | `AnswerSynthesisAgent` | `query: str, docs: List[Any], conversation_history: str = ""` |
 | `CriticAgent` | `query: str, answer: str, context_docs: List[Any], is_retry: bool = False, retry_count: int = 0` |
 | `MultiHopReasoningAgent` | `query: str, initial_context: Optional[List[Any]] = None, force_multihop: bool = False` |
+| `ContextEvaluationAgent` | `query: str, docs: List[Any]` |
+| `CitationTrackingAgent` | `query: str, answer: str, docs: List[Any]` |
+| `SummarizationAgent` | `docs: List[Any], query: str` |
+| `VideoSummarizationAgent` | `query: str, context: List[IngestedChunk]` — or call `agent.summarize_video(source, chunks)` directly |
 
-## Adding Agent to Orchestrator
+---
 
-### 1. Import in orchestrator.py
+## Adding an Agent to the Orchestrator
+
+### 1. Import in `orchestrator.py`
+
 ```python
-from radiant.agents import MyNewAgent
+from radiant_rag_mcp.agents.my_agent import MyAgent
 ```
 
-### 2. Initialize in __init__
+### 2. Initialize in `__init__`
+
 ```python
-self._my_agent = MyNewAgent(llm=llm, config=config.my_agent)
+self._my_agent = MyAgent(llm=llm_clients.chat, config=config.my_agent)
 ```
 
 ### 3. Call with correct parameters
+
 ```python
 result = self._my_agent.run(
     correlation_id=ctx.run_id,
-    query=ctx.original_query,      # Must match _execute() param names
+    query=ctx.original_query,
     context=some_context,
 )
 data = _extract_agent_data(
     result,
     default=fallback_value,
-    agent_name="MyNewAgent",
+    agent_name="MyAgent",
     metrics_collector=self._metrics_collector,
 )
 ```
 
-## Testing Agents
-
-### Unit Test Template
-```python
-import pytest
-from radiant.agents import AgentResult, AgentStatus
-
-class TestMyAgent:
-    def test_successful_execution(self):
-        agent = MyAgent(config)
-        result = agent.run(query="test")
-        
-        assert result.success is True
-        assert result.status == AgentStatus.SUCCESS
-        assert result.data is not None
-        assert result.metrics.duration_ms > 0
-    
-    def test_handles_empty_input(self):
-        agent = MyAgent(config)
-        result = agent.run(query="")
-        
-        # Verify graceful handling
-        assert result.success is True or result.data is not None
-```
-
-### Run Agent Tests
-```bash
-pytest tests/test_base_agent_lifecycle.py -v
-pytest tests/test_agents/test_my_agent.py -v
-```
+---
 
 ## Agent Categories
 
 ```python
 class AgentCategory(Enum):
-    PLANNING = "planning"           # Query analysis, execution planning
-    QUERY_PROCESSING = "query_processing"  # Decomposition, rewrite, expansion
-    RETRIEVAL = "retrieval"         # Dense, sparse, web search
-    POST_RETRIEVAL = "post_retrieval"      # Fusion, reranking, merging
-    GENERATION = "generation"       # Answer synthesis
-    EVALUATION = "evaluation"       # Critic, fact verification
-    TOOL = "tool"                   # Calculator, code execution
-    UTILITY = "utility"             # General purpose
+    PLANNING         = "planning"           # Query analysis, execution planning
+    QUERY_PROCESSING = "query_processing"   # Decomposition, rewrite, expansion
+    RETRIEVAL        = "retrieval"          # Dense, sparse, web search
+    POST_RETRIEVAL   = "post_retrieval"     # Fusion, reranking, merging
+    GENERATION       = "generation"         # Answer synthesis
+    EVALUATION       = "evaluation"         # Critic, fact verification
+    TOOL             = "tool"               # Calculator, code execution
+    UTILITY          = "utility"            # General purpose
 ```
+
+---
 
 ## Metrics Collection
 
-### Automatic Metrics
-Every agent automatically collects:
-- `duration_ms` - Execution time
-- `status` - SUCCESS, FAILED, PARTIAL, SKIPPED
-- `run_id` - Unique execution ID
-- `correlation_id` - Request tracing ID
+### Automatic metrics
 
-### Custom Metrics
-Add in `_after_execute()`:
+Every agent automatically collects:
+- `duration_ms` — execution wall time
+- `status` — `SUCCESS`, `FAILED`, `PARTIAL`, or `SKIPPED`
+- `run_id` — unique execution ID
+- `correlation_id` — request tracing ID
+
+### Custom metrics
+
+Add custom values in `_after_execute()`:
+
 ```python
 def _after_execute(self, result, metrics, **kwargs):
     metrics.items_processed = len(result)
@@ -200,73 +211,116 @@ def _after_execute(self, result, metrics, **kwargs):
     return result
 ```
 
-### Export Metrics
-```python
-from radiant.utils.metrics_export import PrometheusMetricsExporter
+### Export metrics
 
-exporter = PrometheusMetricsExporter(namespace="radiant")
+```python
+from radiant_rag_mcp.utils.metrics_export import PrometheusMetricsExporter
+
+exporter = PrometheusMetricsExporter(namespace="radiant_rag")
 result = agent.run(query="test")
 exporter.record_execution(result)
 ```
 
+---
+
+## Testing Agents
+
+### Unit test template
+
+```python
+import pytest
+from radiant_rag_mcp.agents.base_agent import AgentStatus
+
+class TestMyAgent:
+    def test_successful_execution(self):
+        agent = MyAgent(config=my_config)
+        result = agent.run(query="test")
+
+        assert result.success is True
+        assert result.status == AgentStatus.SUCCESS
+        assert result.data is not None
+        assert result.metrics.duration_ms > 0
+
+    def test_handles_empty_input(self):
+        agent = MyAgent(config=my_config)
+        result = agent.run(query="")
+
+        # Should degrade gracefully
+        assert result.data is not None or result.success is True
+```
+
+### Run tests
+
+```bash
+pytest tests/test_base_agent_lifecycle.py -v
+pytest tests/test_agents/test_my_agent.py -v
+```
+
+---
+
 ## Common Mistakes
 
-### Wrong Parameter Name
+### Wrong parameter name
+
 ```python
-# ✗ WRONG - orchestrator uses 'retrieval_lists' but agent expects 'runs'
+# ✗ WRONG — orchestrator uses 'runs' but 'retrieval_lists' is passed
 result = self._rrf_agent.run(retrieval_lists=data)
 
-# ✓ CORRECT - check _execute() signature
+# ✓ CORRECT — check _execute() signature
 result = self._rrf_agent.run(runs=data)
 ```
 
-### Missing Correlation ID
+### Missing correlation ID
+
 ```python
-# ✗ Missing tracing
+# ✗ Missing — no tracing linkage
 result = agent.run(query=query)
 
 # ✓ Include for tracing
 result = agent.run(correlation_id=ctx.run_id, query=query)
 ```
 
-### Forgetting to Extract Data
-```python
-# ✗ Using AgentResult directly as data
-ctx.plan = self._planning_agent.run(query=query)  # Wrong!
+### Using AgentResult as data directly
 
-# ✓ Extract data from result
+```python
+# ✗ Wrong — ctx.plan gets an AgentResult object, not the plan dict
+ctx.plan = self._planning_agent.run(query=query)
+
+# ✓ Extract the data
 result = self._planning_agent.run(query=query)
 ctx.plan = result.data if result.success else default_plan
 ```
 
+---
+
 ## File Reference
 
 | File | Purpose |
-|------|---------|
-| `__init__.py` | Package exports |
-| `base.py` | AgentContext and context utilities |
-| `base_agent.py` | BaseAgent, LLMAgent, RetrievalAgent, AgentResult |
-| `agent_template.py` | Template for creating new agents |
+|---|---|
+| `base_agent.py` | `BaseAgent`, `LLMAgent`, `RetrievalAgent`, `AgentResult`, `AgentMetrics` |
+| `base.py` | `AgentContext` and context utility functions |
+| `agent_template.py` | Starter template for new agents |
 | `registry.py` | Agent registration and discovery |
-| `planning.py` | Query analysis and execution planning |
+| `planning.py` | Query complexity analysis and execution planning |
 | `decomposition.py` | Break complex queries into sub-queries |
 | `rewrite.py` | Transform queries for better retrieval |
 | `expansion.py` | Add synonyms and related terms |
-| `dense.py` | Vector similarity retrieval |
+| `dense.py` | Vector similarity retrieval (sentence-transformers) |
 | `bm25.py` | Sparse keyword retrieval |
-| `fusion.py` | RRF fusion of multiple retrievers |
-| `automerge.py` | Hierarchical chunk merging |
+| `fusion.py` | Reciprocal Rank Fusion (RRF) |
+| `automerge.py` | Hierarchical parent/child chunk merging |
 | `rerank.py` | Cross-encoder reranking |
-| `synthesis.py` | Answer generation |
-| `critic.py` | Answer quality evaluation |
+| `synthesis.py` | Answer generation from retrieved context |
+| `critic.py` | Answer quality and confidence evaluation |
+| `context_eval.py` | Pre-generation context quality gate |
+| `summarization.py` | Context compression for long conversations |
 | `multihop.py` | Multi-step reasoning chains |
-| `web_search.py` | Web content augmentation |
-| `context_eval.py` | Pre-generation context quality |
-| `summarization.py` | Context compression |
-| `fact_verification.py` | Claim verification |
-| `citation.py` | Source attribution |
-| `chunking.py` | Semantic document chunking |
-| `language_detection.py` | Language identification |
-| `translation.py` | Cross-language support |
-| `strategy_memory.py` | Adaptive retrieval learning |
-| `tools.py` | Calculator, code execution |
+| `fact_verification.py` | Claim verification against retrieved context |
+| `citation.py` | Source attribution and audit trail generation |
+| `chunking.py` | LLM-guided semantic document chunking |
+| `language_detection.py` | Language identification (disabled by default) |
+| `translation.py` | Cross-language document normalization (disabled by default) |
+| `strategy_memory.py` | Adaptive retrieval strategy learning |
+| `video_summarization.py` | Chapter and overall video summarization (transcript + frame captions) |
+| `web_search.py` | Real-time web content augmentation (disabled by default) |
+| `tools.py` | Calculator and code execution tools |
