@@ -146,6 +146,14 @@ RADIANT_CONFIG_PATH=/path/to/config.yaml radiant-mcp
 | `RADIANT_LLM_BACKEND_MODEL` | Override the LLM model name | `gemma4:31b-cloud` |
 | `RADIANT_LLM_BACKEND_BASE_URL` | Low-level alias for `RADIANT_OLLAMA_BASE_URL` | — |
 | `RADIANT_LLM_BACKEND_API_KEY` | Low-level alias for `RADIANT_OLLAMA_API_KEY` | — |
+| `RADIANT_VLM_ENABLED` | Enable VLM captioning for images and silent video | `true` |
+| `RADIANT_VLM_MODEL_NAME` | VLM model (HuggingFace or Ollama cloud model name) | `Qwen/Qwen2-VL-2B-Instruct` |
+| `RADIANT_VLM_DEVICE` | VLM device: `auto`, `cuda`, `cpu`, `cloud` | `auto` |
+| `RADIANT_VLM_OLLAMA_FALLBACK_URL` | Ollama endpoint for cloud VLM | `http://localhost:11434` |
+| `RADIANT_VLM_OLLAMA_FALLBACK_MODEL` | Ollama model name for cloud VLM | `llava` |
+| `RADIANT_VIDEO_WHISPER_MODEL` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large` | `base` |
+| `RADIANT_VIDEO_SUMMARIZATION_SUMMARY_DETAIL` | Summary verbosity: `brief`, `standard`, `detailed` | `standard` |
+| `RADIANT_VIDEO_SUMMARIZATION_WINDOW_CAPTION_SENTENCES` | Sentences per frame-window caption | `4` |
 
 All `config.yaml` keys can be overridden via `RADIANT_<SECTION>_<KEY>`
 (e.g. `RADIANT_RETRIEVAL_DENSE_TOP_K=5`, `RADIANT_PIPELINE_USE_CRITIC=false`).
@@ -162,6 +170,7 @@ All `config.yaml` keys can be overridden via `RADIANT_<SECTION>_<KEY>`
 | `start_conversation` | Create a conversation ID for multi-turn sessions |
 | `ingest_documents` | Index local file paths or directories |
 | `ingest_url` | Index a URL or GitHub repository |
+| `ingest_video` | Index video files or remote video URLs (YouTube, Twitter/X, etc.) |
 | `get_index_stats` | Document counts and system health |
 | `clear_index` | Clear all indexed documents (requires `confirm=True`) |
 | `rebuild_bm25` | Rebuild BM25 index from vector store contents |
@@ -401,6 +410,88 @@ Rebuild the BM25 index from the current vector store.
 {
   "hierarchical": false,
   "message": "Ingest mode set to 'flat'. All subsequent ingest_documents calls will use flat storage by default."
+}
+```
+
+---
+
+### `ingest_video`
+
+Ingests local video files or any remote video URL supported by yt-dlp.
+Processing path is chosen automatically: Whisper transcription for videos
+with audio, VLM frame-window analysis for silent videos.
+
+**Claude Code prompt (local file):**
+```
+Index the video file /tmp/demo.mp4 into my knowledge base and generate a summary.
+```
+
+**Claude Code prompt (YouTube):**
+```
+Ingest the YouTube video https://www.youtube.com/watch?v=aircAruvnKk and summarize it.
+```
+
+**Claude Code prompt (Twitter/X or any yt-dlp URL):**
+```
+Ingest the video at https://twitter.com/i/status/2047129605996192012 into my knowledge base.
+```
+
+**MCP Inspector call (audio video with summary):**
+```json
+{
+  "tool": "ingest_video",
+  "arguments": {
+    "sources": ["https://www.youtube.com/watch?v=aircAruvnKk"],
+    "hierarchical": true,
+    "summarize": true
+  }
+}
+```
+
+**MCP Inspector call (force VLM frame analysis):**
+```json
+{
+  "tool": "ingest_video",
+  "arguments": {
+    "sources": ["/tmp/silent_demo.mp4"],
+    "force_frame_analysis": true,
+    "summarize": false
+  }
+}
+```
+
+**Arguments:**
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `sources` | `list[str]` | *(required)* | File paths or URLs |
+| `hierarchical` | `bool` | `true` | Parent/child chunk storage |
+| `child_chunk_size` | `int` | `512` | Tokens per child chunk |
+| `child_chunk_overlap` | `int` | `50` | Overlap between chunks |
+| `enable_frame_captioning` | `bool` | `false` | Per-frame VLM captions |
+| `force_frame_analysis` | `bool` | `false` | Always use VLM even when audio exists |
+| `summarize` | `bool` | `false` | Generate `VideoSummaryResult` per source |
+
+**Example response:**
+```json
+{
+  "sources_processed": 1,
+  "sources_failed": 0,
+  "chunks_created": 23,
+  "documents_stored": 46,
+  "silent_sources": 0,
+  "audio_sources": 1,
+  "summaries": {
+    "https://www.youtube.com/watch?v=aircAruvnKk": {
+      "title": "But what is a neural network? | Deep learning chapter 1",
+      "duration_seconds": 1120.0,
+      "is_silent": false,
+      "summary": "...",
+      "key_topics": ["neural networks", "activations", "layers", "weights", "backpropagation"],
+      "chapters": [...]
+    }
+  },
+  "errors": []
 }
 ```
 

@@ -46,6 +46,7 @@ methods:
 | `start_conversation` | `app.start_conversation()` |
 | `ingest_documents` | `app.ingest_documents()` |
 | `ingest_url` | `app.ingest_urls()` |
+| `ingest_video` | `app.ingest_videos()` |
 | `get_index_stats` | `app.get_stats()` + `app.check_health()` |
 | `clear_index` | `app.clear_index()` |
 | `rebuild_bm25` | `app.rebuild_bm25_index()` |
@@ -169,6 +170,129 @@ stats = app.ingest_github(
     follow_readme_links=True,
 )
 ```
+
+### Video files and remote URLs — `ingest_videos()`
+
+Ingests local video files and any URL supported by
+[yt-dlp](https://github.com/yt-dlp/yt-dlp): YouTube, Twitter/X, TikTok,
+Instagram, Vimeo, Twitch, Reddit, and 1 000+ other platforms.
+
+```python
+stats = app.ingest_videos(
+    sources=[
+        "./recordings/demo.mp4",                          # local file
+        "https://www.youtube.com/watch?v=aircAruvnKk",   # YouTube
+        "https://twitter.com/i/status/2047129605996192012", # Twitter/X
+    ],
+    use_hierarchical=True,       # parent/child chunk storage (default True)
+    child_chunk_size=512,
+    child_chunk_overlap=50,
+    enable_frame_captioning=False,  # per-frame VLM captions in addition to windows
+    force_frame_analysis=False,     # True = always use VLM, even when audio exists
+    summarize=False,                # True = generate VideoSummaryResult per source
+)
+
+# Returned stats dict
+print(stats["sources_processed"])   # int — sources that produced chunks
+print(stats["sources_failed"])      # int — sources that raised an error
+print(stats["chunks_created"])      # int — total chunks indexed
+print(stats["documents_stored"])    # int — total documents stored
+print(stats["audio_sources"])       # int — routed through Whisper transcription
+print(stats["silent_sources"])      # int — routed through VLM frame analysis
+print(stats["errors"])              # list[str] — per-source error messages
+print(stats["summaries"])           # dict[source, VideoSummaryResult.__dict__]
+```
+
+**Processing path selection:**
+
+```
+process_video(source)
+    │
+    ├── has audio? ──YES──► Whisper transcription ──► transcript chunks
+    │                                                  meta.content_type = "transcript"
+    │
+    └── no audio  ────────► VLM frame-window analysis ► caption chunks
+                             (also: force_frame_analysis=True)
+                             meta.content_type = "frame_window_captions"
+```
+
+**Chunk metadata fields** (from video ingestion):
+
+| Field | Description |
+|---|---|
+| `content_type` | `"transcript"` or `"frame_window_captions"` |
+| `source` | Original file path or URL |
+| `title` | Video title (from yt-dlp metadata or filename) |
+| `start_time` | Window start in seconds |
+| `end_time` | Window end in seconds |
+| `is_silent` | `True` when routed through VLM frame path |
+| `is_youtube` | `True` when source is a YouTube URL specifically |
+| `video_id` | Platform video ID, or empty string for local files |
+| `language` | Detected language code (transcript path only) |
+| `frame_timestamps` | List of sampled frame times (frame-window path only) |
+| `window_index` | Window sequence number (frame-window path only) |
+| `doc_level` | `"child"` (hierarchical) or `"flat"` |
+
+### Video summarization — `VideoSummarizationAgent`
+
+Called automatically when `summarize=True`.  Also usable directly:
+
+```python
+from radiant_rag_mcp.app import create_app
+from radiant_rag_mcp.agents.video_summarization import VideoSummarizationAgent
+from radiant_rag_mcp.config import VideoSummarizationConfig
+
+app = create_app("config.yaml")
+
+# Ingest first (or use chunks already in the store)
+stats = app.ingest_videos(["./lecture.mp4"], summarize=False)
+
+# Run summarization separately with a custom config
+agent = VideoSummarizationAgent(
+    llm=app._llm_clients.chat,
+    config=VideoSummarizationConfig(
+        summary_detail="detailed",   # "brief" | "standard" | "detailed"
+        chapter_gap_seconds=120.0,
+        overall_paragraphs_min=3,
+        overall_paragraphs_max=5,
+    ),
+)
+
+# chunks would come from ingest_videos or a prior search
+result = agent.summarize_video(source="./lecture.mp4", chunks=chunks)
+```
+
+**`VideoSummaryResult` fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `str` | Original file path or URL |
+| `title` | `str` | Video title |
+| `duration_seconds` | `float` | Total video duration |
+| `language` | `str` | Detected language code (empty for silent) |
+| `is_silent` | `bool` | `True` when derived from frame captions |
+| `summary` | `str` | Overall summary text |
+| `key_topics` | `list[str]` | 5–8 key topics / themes |
+| `chapters` | `list[VideoChapter]` | Ordered chapter summaries |
+| `total_chunks` | `int` | Number of input chunks processed |
+| `model_used` | `str` | LLM model name used |
+
+**`VideoChapter` fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `title` | `str` | Chapter title |
+| `start_time` | `float` | Chapter start in seconds |
+| `end_time` | `float` | Chapter end in seconds |
+| `summary` | `str` | Chapter summary text |
+
+**Summary detail presets** (`VideoSummarizationConfig.summary_detail`):
+
+| Preset | Window sentences | Chapter paragraphs | Overall paragraphs |
+|---|---|---|---|
+| `brief` | 2 | 1 | 1–2 |
+| `standard` (default) | 4 | 1–2 | 2–3 |
+| `detailed` | 6 | 2–3 | 3–5 |
 
 ---
 
@@ -491,13 +615,16 @@ radiant-rag query "What is RAG?" --mode hybrid
 | File | Role |
 |---|---|
 | `app.py` | `RadiantRAG` class — all ingestion, query, and management logic |
-| `server.py` | FastMCP server — 10 MCP tools, each a thin wrapper around `app.py` |
+| `server.py` | FastMCP server — 11 MCP tools, each a thin wrapper around `app.py` |
 | `orchestrator.py` | Agent pipeline execution — called by `app.query_raw()` |
 | `config.py` | Configuration dataclasses and `load_config()` |
 | `ingestion/processor.py` | Document parsing, chunking, and cleaning |
+| `ingestion/video_processor.py` | Video ingestion — Whisper transcription + VLM frame analysis |
+| `ingestion/image_captioner.py` | VLM image captioning (used by video frame-window path) |
 | `ingestion/web_crawler.py` | URL crawling |
 | `ingestion/github_crawler.py` | GitHub repository crawling |
 | `storage/` | Redis Stack and ChromaDB backends |
 | `agents/` | 20+ pipeline agents (see `AGENTS.md`) |
+| `agents/video_summarization.py` | `VideoSummarizationAgent` — chapter and overall summaries |
 | `llm/client.py` | LLM and embedding client wrappers |
 | `utils/conversation.py` | Multi-turn session management |

@@ -55,8 +55,9 @@ MCP server. It combines:
 | **Embedding** | sentence-transformers/all-MiniLM-L12-v2 (local, no API key) |
 | **Reranking** | cross-encoder/ms-marco-MiniLM-L12-v2 (local, CPU or GPU) |
 | **Agents** | 20+ specialized pipeline agents |
-| **Ingestion** | Files, directories, URLs, GitHub repositories |
-| **MCP Tools** | 10 tools via stdio or HTTP transport |
+| **Ingestion** | Files, directories, URLs, GitHub repositories, video files and remote URLs |
+| **Video** | Local files + any yt-dlp URL (YouTube, Twitter/X, Vimeo, TikTok, …); Whisper transcription or VLM frame analysis |
+| **MCP Tools** | 11 tools via stdio or HTTP transport |
 | **Monitoring** | Prometheus metrics, OpenTelemetry tracing |
 
 ---
@@ -116,6 +117,7 @@ BaseAgent (Abstract)
 │   ├── LanguageDetectionAgent      (disabled by default)
 │   ├── TranslationAgent            (disabled by default)
 │   ├── IntelligentChunkingAgent
+│   ├── VideoSummarizationAgent
 │   └── WebSearchAgent              (disabled by default)
 │
 ├── RetrievalAgent (requires vector store)
@@ -353,6 +355,68 @@ Setting `pipeline.use_critic: false` is sufficient — you do not also need
 | Code | .py, .js, .ts, .go, .rs, .java, .cpp, and more |
 | JSON/JSONL | .json, .jsonl |
 | Images | .png, .jpg (requires VLM, disabled by default) |
+| **Video** | .mp4, .mkv, .webm, .mov, .avi, .m4v + any yt-dlp URL |
+
+### Video ingestion
+
+Videos are routed to one of two processing paths automatically:
+
+```
+process_video(source)
+    │
+    ├── has audio? ──YES──► Whisper transcription ──► transcript chunks
+    │                                                  content_type="transcript"
+    │
+    └── no audio  ────────► VLM frame-window analysis ► caption chunks
+                             (also: force_frame_analysis=True)
+                             content_type="frame_window_captions"
+```
+
+**Supported sources** — any local video file path *or* any URL supported by
+[yt-dlp](https://github.com/yt-dlp/yt-dlp): YouTube, Twitter/X, TikTok,
+Instagram, Vimeo, Twitch, Reddit, and 1 000+ other platforms.
+
+**Silent video** — when no audio stream is detected (or `force_frame_analysis=True`),
+the pipeline extracts frames at regular intervals, tiles them into filmstrips,
+and sends each window to the configured VLM for description.
+
+**Summarization** — passing `summarize=True` to `ingest_video` runs the
+`VideoSummarizationAgent` on each source after ingestion, producing per-chapter
+and overall summaries at `brief`, `standard`, or `detailed` verbosity.
+
+```yaml
+# Key video config sections in config.yaml
+video:
+  whisper_model: "base"              # Whisper model size
+  whisper_device: "auto"             # auto | cuda | cpu
+  window_duration_seconds: 10.0      # Frame-analysis window size
+  frames_per_window: 3               # Frames sampled per window
+  enable_scene_change_detection: true
+
+vlm:
+  enabled: true
+  model_name: "Qwen/Qwen2-VL-2B-Instruct"   # local HuggingFace model
+  device: "auto"
+  ollama_fallback_url: "http://localhost:11434"  # Ollama VLM fallback
+  ollama_fallback_model: "llava"
+
+video_summarization:
+  summary_detail: "standard"         # brief | standard | detailed
+  chapter_gap_seconds: 120.0
+```
+
+**Key environment variable overrides:**
+
+```bash
+export RADIANT_VLM_ENABLED=true
+export RADIANT_VLM_MODEL_NAME="gemma3:12b-cloud"
+export RADIANT_VLM_DEVICE="cloud"
+export RADIANT_VLM_OLLAMA_FALLBACK_URL="https://ollama.com/v1"
+export RADIANT_VLM_OLLAMA_FALLBACK_MODEL="gemma3:12b-cloud"
+export RADIANT_VIDEO_WHISPER_MODEL="base"
+export RADIANT_VIDEO_SUMMARIZATION_SUMMARY_DETAIL="standard"
+export RADIANT_VIDEO_SUMMARIZATION_WINDOW_CAPTION_SENTENCES="4"
+```
 
 ### Hierarchical storage
 
@@ -478,6 +542,20 @@ app = create_app("config.yaml")
 app.ingest_documents(["./docs/"], use_hierarchical=True)
 app.ingest_urls(["https://github.com/owner/repo"])
 
+# Ingest video — local files or any yt-dlp URL
+stats = app.ingest_videos(
+    sources=["./clips/demo.mp4", "https://www.youtube.com/watch?v=aircAruvnKk"],
+    use_hierarchical=True,
+    force_frame_analysis=False,   # True to force VLM even when audio exists
+    summarize=True,               # True to generate VideoSummaryResult per source
+)
+print(stats["sources_processed"])   # int
+print(stats["chunks_created"])      # int
+print(stats["audio_sources"])       # sources routed through Whisper
+print(stats["silent_sources"])      # sources routed through VLM frame analysis
+for src, summary in stats["summaries"].items():
+    print(summary["title"], "—", len(summary["chapters"]), "chapters")
+
 # Query (full pipeline)
 result = app.query_raw("What is RAG?", retrieval_mode="hybrid")
 print(result.answer)
@@ -536,13 +614,19 @@ radiant-rag-mcp/
 │       ├── config.py           # Configuration dataclasses + loading
 │       ├── agents/             # 20+ pipeline agents  (see AGENTS.md)
 │       ├── ingestion/          # Document processors and crawlers
+│       │   ├── processor.py        # Main document router
+│       │   ├── video_processor.py  # Video ingestion (Whisper + VLM frame analysis)
+│       │   ├── image_captioner.py  # VLM image captioning
+│       │   ├── web_crawler.py
+│       │   └── github_crawler.py
 │       ├── storage/            # Redis and ChromaDB backends
 │       ├── llm/                # LLM client, backends, local models
 │       ├── utils/              # Cache, metrics, conversation management
 │       └── ui/                 # Display helpers and report generation
 │
 └── notebooks/
-    └── radiant_rag_mcp_colab_test.ipynb
+    ├── radiant_rag_mcp_colab_test.ipynb
+    └── radiant_rag_mcp_video_test.ipynb   # Video ingestion test notebook
 ```
 
 ---

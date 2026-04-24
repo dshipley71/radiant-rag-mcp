@@ -25,6 +25,7 @@ BaseAgent (Abstract)
 │   ├── LanguageDetectionAgent      (disabled by default)
 │   ├── TranslationAgent            (disabled by default)
 │   ├── IntelligentChunkingAgent
+│   ├── VideoSummarizationAgent
 │   └── WebSearchAgent              (disabled by default)
 │
 ├── RetrievalAgent (requires vector store)
@@ -136,6 +137,7 @@ Parameter names in `_execute()` must match exactly.
 | `ContextEvaluationAgent` | `query: str, docs: List[Any]` |
 | `CitationTrackingAgent` | `query: str, answer: str, docs: List[Any]` |
 | `SummarizationAgent` | `docs: List[Any], query: str` |
+| `VideoSummarizationAgent` | `query: str, context: List[IngestedChunk]` — or call `agent.summarize_video(source, chunks)` directly |
 
 ---
 
@@ -319,5 +321,6 @@ ctx.plan = result.data if result.success else default_plan
 | `language_detection.py` | Language identification (disabled by default) |
 | `translation.py` | Cross-language document normalization (disabled by default) |
 | `strategy_memory.py` | Adaptive retrieval strategy learning |
+| `video_summarization.py` | Chapter and overall video summarization (transcript + frame captions) |
 | `web_search.py` | Real-time web content augmentation (disabled by default) |
 | `tools.py` | Calculator and code execution tools |

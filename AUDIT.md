@@ -1,6 +1,6 @@
 # Radiant RAG MCP — Audit & Optimization Report
 
-**Status as of `main` branch, April 2026.**  
+**Status as of `main` branch, April 2026 — updated for video ingestion.**  
 Items marked ✅ are completed. Items marked 🔲 remain open.
 
 ---
@@ -27,6 +27,11 @@ The following items from the original audit have been resolved:
 | Notebook: port kill before server thread | ✅ `fuser -k {port}/tcp` added to prevent port conflicts on re-run |
 | Notebook: API key via Colab Secrets | ✅ Uses `userdata.get('OLLAMA_API_KEY')` |
 | Docs out of sync (README, MCP_README, AGENTS.md) | ✅ All updated — see below |
+| Video ingestion pipeline | ✅ `video_processor.py` added — Whisper transcription for audio, VLM frame-window analysis for silent video; `ingest_videos()` on `RadiantRAG`; `ingest_video` MCP tool (tool 11) |
+| `VideoSummarizationAgent` | ✅ Map-reduce chapter + overall summarisation; `brief` / `standard` / `detailed` presets; `VideoSummaryResult` with chapters, key topics, and metadata |
+| `VideoProcessorConfig` missing `window_caption_sentences` | ✅ Field added to `config.py` dataclass and wired into the factory constructor; reads from `RADIANT_VIDEO_SUMMARIZATION_WINDOW_CAPTION_SENTENCES` |
+| Remote video URL support (any yt-dlp source) | ✅ `is_remote_url()` / `process_remote_url()` / `_download_remote()` added; `VideoMetadata.is_youtube` set dynamically; `process_youtube()` / `_download_youtube()` kept as backward-compat aliases |
+| `_REMOTE_URL_RE` pattern | ✅ Module-level `^https?://` compiled pattern routes any HTTP/S URL through yt-dlp; unsupported domains surface a clear `RuntimeError` |
 
 ---
 
